@@ -157,7 +157,6 @@ impl Drop for AtomicWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use tokio::task;
 
     #[tokio::test]
@@ -165,13 +164,13 @@ mod tests {
         let test_file = "/tmp/test_lock_file";
 
         // 启动两个并发任务尝试获取同一个锁
-        let task1 = task::spawn(async {
+        let task1 = task::spawn(async move {
             let _lock = FileLock::acquire(test_file, 0).await.unwrap();
             tokio::time::sleep(Duration::from_millis(100)).await;
             "task1"
         });
 
-        let task2 = task::spawn(async {
+        let task2 = task::spawn(async move {
             tokio::time::sleep(Duration::from_millis(10)).await;
             let result = FileLock::acquire(test_file, 0).await;
             assert!(result.is_err()); // 应该失败，因为锁已被task1持有
