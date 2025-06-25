@@ -82,30 +82,32 @@ impl ProcessManager {
                 process_state.start(pid);
 
                 // Save process state
-                self.storage.save_process(&process_state)?;
+                self.storage.save_process(&process_state).await?;
 
                 // Monitor process in background
                 let storage = Storage::new()?;
                 let process_name = name.clone();
                 tokio::spawn(async move {
                     let status = child.wait().await;
-                    let mut processes = storage.load_processes().unwrap_or_default();
 
-                    if let Some(process) = processes.get_mut(&process_name) {
-                        match status {
-                            Ok(exit_status) => {
-                                if exit_status.success() {
-                                    process.stop();
-                                } else {
+                    // 使用安全的更新方法
+                    let _ = storage
+                        .update_process_status(&process_name, |process| {
+                            match status {
+                                Ok(exit_status) => {
+                                    if exit_status.success() {
+                                        process.stop();
+                                    } else {
+                                        process.fail();
+                                    }
+                                }
+                                Err(_) => {
                                     process.fail();
                                 }
                             }
-                            Err(_) => {
-                                process.fail();
-                            }
-                        }
-                        let _ = storage.save_processes(&processes);
-                    }
+                            Ok(())
+                        })
+                        .await;
                 });
 
                 println!("Process '{}' started with PID {}", name, pid);
@@ -114,10 +116,13 @@ impl ProcessManager {
             Err(spawn_error) => {
                 // Process failed to start - save the failed state
                 process_state.fail();
-                self.storage.save_process(&process_state)?;
+                self.storage.save_process(&process_state).await?;
 
                 // Write error message to stderr log
-                if let Err(write_err) = std::fs::write(&stderr_path, format!("Failed to spawn process: {}\n", spawn_error)) {
+                if let Err(write_err) = std::fs::write(
+                    &stderr_path,
+                    format!("Failed to spawn process: {}\n", spawn_error),
+                ) {
                     eprintln!("Warning: Failed to write error to log file: {}", write_err);
                 }
 
@@ -126,12 +131,11 @@ impl ProcessManager {
         }
     }
 
-
-
-    pub fn stop_process(&self, name: &str) -> Result<()> {
-        let mut processes = self.storage.load_processes()?;
-        
-        let process = processes.get_mut(name)
+    pub async fn stop_process(&self, name: &str) -> Result<()> {
+        // 首先获取进程信息
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         if !process.is_running() {
@@ -139,26 +143,37 @@ impl ProcessManager {
         }
 
         let pid = process.pid.unwrap();
-        
+
         // Send SIGTERM first
         if let Err(e) = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
-            return Err(anyhow::anyhow!("Failed to send SIGTERM to process {}: {}", pid, e));
+            return Err(anyhow::anyhow!(
+                "Failed to send SIGTERM to process {}: {}",
+                pid,
+                e
+            ));
         }
 
-        process.stop();
-        self.storage.save_processes(&processes)?;
+        // 使用安全的更新方法
+        self.storage
+            .update_process_status(name, |process| {
+                process.stop();
+                Ok(())
+            })
+            .await?;
 
         println!("Process '{}' stopped", name);
         Ok(())
     }
 
     pub async fn restart_process(&self, name: &str) -> Result<()> {
-        let process = self.storage.get_process(name)?
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         // Stop if running
         if process.is_running() {
-            self.stop_process(name)?;
+            self.stop_process(name).await?;
             // Wait a bit for the process to stop
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
@@ -170,20 +185,24 @@ impl ProcessManager {
             process.config.args,
             process.config.workdir,
             process.config.env_vars,
-        ).await
+        )
+        .await
     }
 
-    pub fn delete_process(&self, name: &str) -> Result<()> {
+    pub async fn delete_process(&self, name: &str) -> Result<()> {
         let processes = self.storage.load_processes()?;
-        
+
         if let Some(process) = processes.get(name) {
             if process.is_running() {
-                return Err(anyhow::anyhow!("Cannot delete running process '{}'. Stop it first.", name));
+                return Err(anyhow::anyhow!(
+                    "Cannot delete running process '{}'. Stop it first.",
+                    name
+                ));
             }
         }
 
-        let deleted = self.storage.delete_process(name)?;
-        
+        let deleted = self.storage.delete_process(name).await?;
+
         if deleted {
             println!("Process '{}' deleted", name);
         } else {
@@ -193,7 +212,7 @@ impl ProcessManager {
         Ok(())
     }
 
-    pub fn list_processes(&self) -> Result<()> {
+    pub async fn list_processes(&self) -> Result<()> {
         let mut processes = self.storage.load_processes()?;
 
         if processes.is_empty() {
@@ -232,15 +251,22 @@ impl ProcessManager {
 
         // Save updated statuses if any changes were made
         if status_updated {
-            self.storage.save_processes(&processes)?;
+            self.storage.save_processes(&processes).await?;
         }
 
-        println!("{:<20} {:<10} {:<10} {:<20}", "NAME", "STATUS", "PID", "COMMAND");
+        println!(
+            "{:<20} {:<10} {:<10} {:<20}",
+            "NAME", "STATUS", "PID", "COMMAND"
+        );
         println!("{}", "-".repeat(70));
 
         for (name, process) in processes {
             let pid_str = process.pid.map_or("N/A".to_string(), |p| p.to_string());
-            let command = format!("{} {}", process.config.command, process.config.args.join(" "));
+            let command = format!(
+                "{} {}",
+                process.config.command,
+                process.config.args.join(" ")
+            );
             let command_display = if command.len() > 20 {
                 format!("{}...", &command[..17])
             } else {
@@ -249,10 +275,7 @@ impl ProcessManager {
 
             println!(
                 "{:<20} {:<10} {:<10} {:<20}",
-                name,
-                process.status,
-                pid_str,
-                command_display
+                name, process.status, pid_str, command_display
             );
         }
 
@@ -260,13 +283,19 @@ impl ProcessManager {
     }
 
     pub fn describe_process(&self, name: &str) -> Result<()> {
-        let process = self.storage.get_process(name)?
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         println!("Process: {}", process.config.name);
         println!("ID: {}", process.config.id);
         println!("Status: {}", process.status);
-        println!("Command: {} {}", process.config.command, process.config.args.join(" "));
+        println!(
+            "Command: {} {}",
+            process.config.command,
+            process.config.args.join(" ")
+        );
 
         if let Some(ref workdir) = process.config.workdir {
             println!("Working Directory: {}", workdir.display());
@@ -277,8 +306,14 @@ impl ProcessManager {
         }
 
         println!("Restart Count: {}", process.restart_count);
-        println!("Created: {}", process.config.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
-        println!("Updated: {}", process.config.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
+        println!(
+            "Created: {}",
+            process.config.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+        );
+        println!(
+            "Updated: {}",
+            process.config.updated_at.format("%Y-%m-%d %H:%M:%S UTC")
+        );
 
         if let Some(started_at) = process.started_at {
             println!("Started: {}", started_at.format("%Y-%m-%d %H:%M:%S UTC"));
@@ -302,7 +337,9 @@ impl ProcessManager {
     }
 
     pub fn show_logs(&self, name: &str, lines: usize, follow: bool) -> Result<()> {
-        let process = self.storage.get_process(name)?
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         if follow {
@@ -310,7 +347,9 @@ impl ProcessManager {
             println!("Press Ctrl+C to stop");
 
             // This will block, so we need to handle it in an async context
-            return Err(anyhow::anyhow!("Follow mode should be handled in async context"));
+            return Err(anyhow::anyhow!(
+                "Follow mode should be handled in async context"
+            ));
         } else {
             println!("=== STDOUT ===");
             Logger::tail_logs(&process.stdout_path, lines)?;
@@ -323,7 +362,9 @@ impl ProcessManager {
     }
 
     pub async fn follow_logs(&self, name: &str) -> Result<()> {
-        let process = self.storage.get_process(name)?
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         println!("Following logs for process '{}'...", name);
@@ -333,10 +374,11 @@ impl ProcessManager {
         Logger::follow_logs(&process.stdout_path).await
     }
 
-    pub fn set_env_vars(&self, name: &str, env_vars: HashMap<String, String>) -> Result<()> {
-        let mut processes = self.storage.load_processes()?;
-
-        let process = processes.get_mut(name)
+    pub async fn set_env_vars(&self, name: &str, env_vars: HashMap<String, String>) -> Result<()> {
+        // 首先检查进程状态
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         if process.is_running() {
@@ -346,8 +388,14 @@ impl ProcessManager {
             ));
         }
 
-        process.config.update_env_vars(env_vars.clone());
-        self.storage.save_processes(&processes)?;
+        // 使用安全的更新方法
+        let env_vars_clone = env_vars.clone();
+        self.storage
+            .update_process_status(name, |process| {
+                process.config.update_env_vars(env_vars_clone);
+                Ok(())
+            })
+            .await?;
 
         println!("Environment variables updated for process '{}':", name);
         for (key, value) in env_vars {
@@ -357,10 +405,12 @@ impl ProcessManager {
         Ok(())
     }
 
-    pub fn check_process_status(&self, name: &str) -> Result<()> {
-        let mut processes = self.storage.load_processes()?;
-
-        let process = processes.get_mut(name)
+    #[allow(dead_code)]
+    pub async fn check_process_status(&self, name: &str) -> Result<()> {
+        // 首先获取进程信息
+        let process = self
+            .storage
+            .get_process(name)?
             .ok_or_else(|| anyhow::anyhow!("Process '{}' not found", name))?;
 
         if let Some(pid) = process.pid {
@@ -369,8 +419,12 @@ impl ProcessManager {
                 Ok(_) => {
                     // Process is running
                     if process.status != ProcessStatus::Running {
-                        process.status = ProcessStatus::Running;
-                        self.storage.save_processes(&processes)?;
+                        self.storage
+                            .update_process_status(name, |process| {
+                                process.status = ProcessStatus::Running;
+                                Ok(())
+                            })
+                            .await?;
                     }
                 }
                 Err(_) => {
@@ -378,8 +432,12 @@ impl ProcessManager {
                     if process.status == ProcessStatus::Running {
                         // Process was running but now it's not
                         // Mark as stopped since we can't determine the exit reason
-                        process.stop();
-                        self.storage.save_processes(&processes)?;
+                        self.storage
+                            .update_process_status(name, |process| {
+                                process.stop();
+                                Ok(())
+                            })
+                            .await?;
                     }
                 }
             }

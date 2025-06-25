@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl ProcessConfig {
 }
 
 impl ProcessState {
-    pub fn new(config: ProcessConfig, data_dir: &PathBuf) -> Self {
+    pub fn new(config: ProcessConfig, data_dir: &Path) -> Self {
         let stdout_path = data_dir.join(format!("{}.stdout.log", config.name));
         let stderr_path = data_dir.join(format!("{}.stderr.log", config.name));
 
@@ -99,6 +99,7 @@ impl ProcessState {
         self.stopped_at = Some(Utc::now());
     }
 
+    #[allow(dead_code)]
     pub fn restart(&mut self, pid: u32) {
         self.restart_count += 1;
         self.start(pid);

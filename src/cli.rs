@@ -77,7 +77,10 @@ impl Commands {
             if let Some((key, value)) = env_str.split_once('=') {
                 env_vars.insert(key.to_string(), value.to_string());
             } else {
-                return Err(anyhow::anyhow!("Invalid environment variable format: {}", env_str));
+                return Err(anyhow::anyhow!(
+                    "Invalid environment variable format: {}",
+                    env_str
+                ));
             }
         }
         Ok(env_vars)
