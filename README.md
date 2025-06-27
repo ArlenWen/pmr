@@ -1,277 +1,196 @@
-# PMR - Process Manager in Rust
+# PMR - Process Management Tool
 
-PMR 是一个用 Rust 编写的 Linux 进程管理工具，提供了完整的进程生命周期管理功能。
+PMR (Process Manager in Rust) 是一个用 Rust 编写的命令行进程管理工具，支持系统级进程管理、独立环境变量、日志管理和并发操作。
 
 ## 特性
 
-- **系统级进程管理** - 管理的进程独立于工具运行，工具退出不会影响被管理的进程
-- **隔离的环境变量** - 每个进程都有独立的环境变量配置
-- **完整的进程操作** - 支持启动、停止、重启、删除进程
-- **日志管理** - 自动捕获和管理进程的 stdout 和 stderr
-- **持久化存储** - 进程配置和状态持久化存储
-- **命令行界面** - 简洁易用的命令行接口
-- **并发安全** - 支持多个 PMR 实例同时运行，确保数据一致性
-- **原子操作** - 使用文件锁和原子写入机制防止数据损坏
+- **系统级进程管理**: 进程独立于工具运行，不会因为工具退出而终止
+- **隔离的环境变量**: 每个进程都有独立的环境变量配置
+- **完整的进程操作**: 支持启动、停止、重启、删除进程
+- **日志管理**: 自动捕获和管理进程的 stdout 和 stderr
+- **SQLite 存储**: 使用 SQLite 数据库存储进程信息，支持并发操作
+- **状态监控**: 实时监控进程状态
 
 ## 安装
 
 ```bash
-# 克隆项目
+# 克隆仓库
 git clone <repository-url>
 cd pmr
 
-# 构建项目
+# 编译
 cargo build --release
 
-# 安装到系统路径（可选）
+# 可选：安装到系统路径
 cargo install --path .
 ```
 
 ## 使用方法
 
-### 基本命令
+### 启动进程
 
-#### 启动进程
 ```bash
-# 启动一个简单的进程
-pmr start my-app /usr/bin/my-application
+# 基本用法
+pmr start <进程名> <命令> [参数...]
 
-# 启动带参数的进程
-pmr start web-server nginx -g "daemon off;"
+# 示例：启动一个简单的进程
+pmr start my-sleep sleep 60
 
-# 启动时设置工作目录
-pmr start my-service --workdir /opt/myapp ./start.sh
+# 使用环境变量
+pmr start web-server python3 server.py -e PORT=8080 -e DEBUG=true
 
-# 启动时设置环境变量
-pmr start api-server --env PORT=8080 --env ENV=production ./server
+# 指定工作目录
+pmr start my-app ./app.sh -w /path/to/workdir
+
+# 复杂示例
+pmr start nginx nginx -e NGINX_PORT=80 -w /etc/nginx
 ```
 
-#### 查看进程
+### 查看进程列表
+
 ```bash
-# 列出所有进程
-pmr list
-
-# 查看进程详细信息
-pmr describe my-app
-```
-
-#### 控制进程
-```bash
-# 停止进程
-pmr stop my-app
-
-# 重启进程
-pmr restart my-app
-
-# 删除进程配置（需要先停止进程）
-pmr delete my-app
-```
-
-#### 查看日志
-```bash
-# 查看进程日志（默认显示最后50行）
-pmr logs my-app
-
-# 查看指定行数的日志
-pmr logs my-app --lines 100
-
-# 实时跟踪日志
-pmr logs my-app --follow
-```
-
-#### 环境变量管理
-```bash
-# 为进程设置环境变量（需要先停止进程）
-pmr env my-app DATABASE_URL=postgresql://localhost/mydb
-pmr env my-app API_KEY=secret123 DEBUG=true
-```
-
-### 高级用法
-
-#### 启动时的完整配置
-```bash
-pmr start web-app \
-  --workdir /var/www/html \
-  --env PORT=3000 \
-  --env NODE_ENV=production \
-  node server.js
-```
-
-#### 管理多个相关进程
-```bash
-# 启动数据库
-pmr start database postgres -D /var/lib/postgresql/data
-
-# 启动 Redis
-pmr start cache redis-server /etc/redis/redis.conf
-
-# 启动 Web 应用
-pmr start webapp --env DB_HOST=localhost --env REDIS_HOST=localhost ./app
-
-# 查看所有进程状态
 pmr list
 ```
 
-#### 并发操作
-PMR 支持安全的并发操作，可以在多个终端同时执行命令：
-
-```bash
-# 终端1：启动进程
-pmr start app1 /usr/bin/app1 &
-
-# 终端2：同时启动另一个进程
-pmr start app2 /usr/bin/app2 &
-
-# 终端3：同时查看进程列表
-pmr list &
-
-# 终端4：同时修改环境变量
-pmr env app1 KEY=value &
+输出示例：
+```
+NAME                 STATUS     PID        COMMAND                        CREATED             
+------------------------------------------------------------------------------------------
+web-server           running    12345      python3 server.py             2025-06-27 10:30:15
+my-sleep             stopped    12340      sleep 60                       2025-06-27 10:25:10
 ```
 
-所有操作都是并发安全的，不会出现数据丢失或损坏。
+### 查看进程状态
 
-## 数据存储
+```bash
+pmr status <进程名>
+```
 
-PMR 将进程配置和状态存储在用户数据目录中：
-- Linux: `~/.local/share/pmr/`
+输出示例：
+```
+Process: web-server
+Status: running
+PID: 12345
+Command: python3 server.py
+Working Directory: /home/user/project
+Created: 2025-06-27 10:30:15
+Updated: 2025-06-27 10:30:15
+Log File: /home/user/.pmr/logs/web-server.log
+Environment Variables:
+  PORT=8080
+  DEBUG=true
+```
 
-存储的文件包括：
-- `processes.json` - 进程配置和状态（受文件锁保护）
-- `processes.json.lock` - 文件锁（自动管理）
-- `<process-name>.stdout.log` - 进程标准输出日志
-- `<process-name>.stderr.log` - 进程标准错误日志
+### 查看进程日志
 
-### 并发安全机制
+```bash
+# 查看进程日志 (stdout 和 stderr 合并)
+pmr logs <进程名>
 
-PMR 使用以下机制确保并发安全：
+# 查看最后 50 行
+pmr logs <进程名> -n 50
+```
 
-1. **文件锁保护** - 使用 `flock` 系统调用防止多个实例同时修改元数据
-2. **原子写入** - 使用临时文件+重命名确保写入操作的完整性
-3. **重试机制** - 智能处理锁竞争情况，自动重试获取锁
-4. **自动清理** - 自动清理锁文件和临时文件，防止资源泄露
+### 停止进程
 
-## 进程状态
+```bash
+pmr stop <进程名>
+```
 
-PMR 跟踪以下进程状态：
-- **running** - 进程正在运行
-- **stopped** - 进程已停止
-- **failed** - 进程异常退出
-- **unknown** - 进程状态未知
+### 重启进程
 
-## 注意事项
+```bash
+pmr restart <进程名>
+```
 
-1. **权限要求** - 确保有足够的权限启动目标进程
-2. **进程独立性** - 被管理的进程会在后台独立运行，不受 PMR 工具退出影响
-3. **环境变量修改** - 只能在进程停止状态下修改环境变量
-4. **日志轮转** - 当前版本不支持自动日志轮转，需要手动管理日志文件大小
-5. **并发操作** - 支持多个 PMR 实例并发运行，如遇到锁竞争会自动重试
+### 删除进程
+
+```bash
+pmr delete <进程名>
+```
+
+## 配置
+
+PMR 使用以下目录结构：
+
+- 数据库文件: `~/.pmr/processes.db`
+- 日志目录: `~/.pmr/logs/` (每个进程一个 `.log` 文件，包含 stdout 和 stderr)
+
+这些目录会在首次运行时自动创建。
 
 ## 示例场景
 
-### Web 服务管理
+### 1. 管理 Web 服务器
+
 ```bash
-# 启动 Nginx
-pmr start nginx nginx -g "daemon off;"
+# 启动 Web 服务器
+pmr start web-server python3 -m http.server -e PORT=8080 -w /var/www/html
 
-# 启动 Node.js 应用
-pmr start api --env PORT=3000 --workdir /opt/myapp node app.js
+# 查看状态
+pmr status web-server
 
-# 查看服务状态
-pmr list
-
-# 查看应用日志
-pmr logs api --follow
-```
-
-### 开发环境管理
-```bash
-# 启动开发数据库
-pmr start dev-db --env POSTGRES_DB=myapp_dev postgres
-
-# 启动开发服务器
-pmr start dev-server --env NODE_ENV=development npm start
+# 查看日志
+pmr logs web-server
 
 # 重启服务器
-pmr restart dev-server
+pmr restart web-server
 ```
 
-## 故障排除
+### 2. 运行后台任务
 
-### 进程启动失败
-1. 检查命令路径是否正确
-2. 确认有执行权限
-3. 查看错误日志：`pmr logs <process-name>`
-
-### 进程状态不同步
-进程状态可能不会立即更新。如果发现状态不准确，可以：
-1. 重新查看进程列表：`pmr list`
-2. 检查系统进程：`ps aux | grep <process-name>`
-
-### 并发操作问题
-如果遇到并发相关的问题：
-1. **锁获取失败** - PMR 会自动重试，通常几秒钟内会成功
-2. **操作被阻塞** - 检查是否有其他 PMR 实例正在执行长时间操作
-3. **锁文件残留** - 极少情况下可能需要手动删除 `~/.local/share/pmr/processes.json.lock`
-
-### 日志文件过大
-定期清理日志文件：
 ```bash
-# 查看日志文件位置
-pmr describe <process-name>
+# 启动数据备份任务
+pmr start backup-job ./backup.sh -e BACKUP_DIR=/backup -w /home/user/scripts
 
-# 手动清理日志
-> ~/.local/share/pmr/<process-name>.stdout.log
-> ~/.local/share/pmr/<process-name>.stderr.log
+# 查看任务状态
+pmr list
+
+# 查看备份日志
+pmr logs backup-job
 ```
 
-## 技术架构
+### 3. 开发环境管理
 
-### 并发安全设计
+```bash
+# 启动数据库
+pmr start postgres postgres -D /var/lib/postgresql/data
 
-PMR 采用了先进的并发安全机制：
+# 启动 Redis
+pmr start redis redis-server /etc/redis/redis.conf
 
-- **文件锁机制** - 基于 `flock` 系统调用的文件锁，确保同一时间只有一个进程能修改元数据
-- **原子操作** - 使用临时文件+重命名的方式确保写入操作的原子性
-- **智能重试** - 当遇到锁竞争时，使用指数退避算法自动重试
-- **资源管理** - 通过 Rust 的 RAII 机制自动清理锁文件和临时文件
+# 启动应用服务器
+pmr start app-server npm start -e NODE_ENV=development -w /path/to/app
 
-### 依赖项
+# 查看所有服务状态
+pmr list
+```
 
+## 技术细节
+
+- **进程分离**: 使用 `setsid` 创建新的会话，确保进程独立运行
+- **数据库**: SQLite 数据库存储进程元数据，支持并发访问
+- **日志管理**: 自动重定向 stdout/stderr 到统一的日志文件
+- **状态监控**: 使用系统调用检查进程是否仍在运行
+
+## 构建要求
+
+- Rust 1.70+
+- SQLite 3.x
+
+## 依赖项
+
+主要依赖：
+- `clap` - 命令行解析
 - `tokio` - 异步运行时
-- `serde` + `serde_json` - 数据序列化
-- `clap` - 命令行参数解析
-- `nix` - Unix 系统调用接口
-- `fs2` - 文件锁功能
-- `anyhow` - 错误处理
+- `sqlx` - SQLite 数据库操作
+- `serde` - 序列化/反序列化
 - `chrono` - 时间处理
-- `uuid` - 唯一标识符生成
-
-### 测试
-
-项目包含全面的并发安全测试：
-
-```bash
-# 运行并发测试
-./test_concurrency.sh
-```
-
-测试覆盖：
-- 并发进程启动
-- 并发环境变量修改
-- 并发进程删除
-- 混合并发操作
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request 来改进这个项目。
-
-在提交代码前，请确保：
-1. 运行 `cargo test` 通过所有单元测试
-2. 运行 `./test_concurrency.sh` 通过并发测试
-3. 使用 `cargo fmt` 格式化代码
-4. 使用 `cargo clippy` 检查代码质量
+- `uuid` - 唯一ID生成
 
 ## 许可证
 
-MIT License
+[添加你的许可证信息]
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！

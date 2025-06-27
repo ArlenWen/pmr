@@ -1,63 +1,70 @@
-mod cli;
-mod lock;
-mod logger;
-mod manager;
-mod process;
-mod storage;
-
 use clap::Parser;
-use cli::{Cli, Commands};
-use manager::ProcessManager;
-use std::path::PathBuf;
+use pmr::{
+    cli::{Cli, Commands},
+    config::Config,
+    process::ProcessManager,
+};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
-    let manager = ProcessManager::new()?;
+    let config = Config::new();
+    let process_manager = ProcessManager::new(config).await?;
 
     match cli.command {
-        Commands::Start {
-            name,
-            command,
-            args,
-            workdir,
-            env,
-        } => {
-            let workdir = workdir.map(PathBuf::from);
-            let env_vars = Commands::parse_env_vars(&env)?;
-            manager
-                .start_process(name, command, args, workdir, env_vars)
-                .await?;
+        Commands::Start { name, command, args, env, workdir } => {
+            let env_vars = Commands::parse_env_vars(env);
+            process_manager.start_process(&name, &command, args, env_vars, workdir).await?;
         }
         Commands::Stop { name } => {
-            manager.stop_process(&name).await?;
+            process_manager.stop_process(&name).await?;
         }
         Commands::Restart { name } => {
-            manager.restart_process(&name).await?;
+            process_manager.restart_process(&name).await?;
         }
         Commands::Delete { name } => {
-            manager.delete_process(&name).await?;
+            process_manager.delete_process(&name).await?;
         }
         Commands::List => {
-            manager.list_processes().await?;
-        }
-        Commands::Describe { name } => {
-            manager.describe_process(&name)?;
-        }
-        Commands::Logs {
-            name,
-            lines,
-            follow,
-        } => {
-            if follow {
-                manager.follow_logs(&name).await?;
+            let processes = process_manager.list_processes().await?;
+            if processes.is_empty() {
+                println!("No processes found.");
             } else {
-                manager.show_logs(&name, lines, false)?;
+                println!("{:<20} {:<10} {:<10} {:<30} {:<20}", "NAME", "STATUS", "PID", "COMMAND", "CREATED");
+                println!("{}", "-".repeat(90));
+                for process in processes {
+                    let pid_str = process.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".to_string());
+                    let created_str = process.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
+                    println!("{:<20} {:<10} {:<10} {:<30} {:<20}",
+                        process.name,
+                        process.status,
+                        pid_str,
+                        format!("{} {}", process.command, process.args.join(" ")),
+                        created_str
+                    );
+                }
             }
         }
-        Commands::Env { name, vars } => {
-            let env_vars = Commands::parse_env_vars(&vars)?;
-            manager.set_env_vars(&name, env_vars).await?;
+        Commands::Status { name } => {
+            let process = process_manager.get_process_status(&name).await?;
+            println!("Process: {}", process.name);
+            println!("Status: {}", process.status);
+            println!("PID: {}", process.pid.map(|p| p.to_string()).unwrap_or_else(|| "N/A".to_string()));
+            println!("Command: {} {}", process.command, process.args.join(" "));
+            println!("Working Directory: {}", process.working_dir);
+            println!("Created: {}", process.created_at.format("%Y-%m-%d %H:%M:%S"));
+            println!("Updated: {}", process.updated_at.format("%Y-%m-%d %H:%M:%S"));
+            println!("Log File: {}", process.log_path);
+            if !process.env_vars.is_empty() {
+                println!("Environment Variables:");
+                for (key, value) in &process.env_vars {
+                    println!("  {}={}", key, value);
+                }
+            }
+        }
+        Commands::Logs { name, lines, .. } => {
+            let logs = process_manager.get_process_logs(&name, lines).await?;
+            println!("{}", logs);
         }
     }
 
