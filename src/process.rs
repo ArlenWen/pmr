@@ -16,9 +16,10 @@ pub struct ProcessManager {
 impl ProcessManager {
     pub async fn new(config: Config) -> Result<Self> {
         config.ensure_directories()?;
-        let database_url = format!("sqlite:{}", config.database_path.display());
+        // Add create_if_missing parameter to SQLite URL to automatically create the database file
+        let database_url = format!("sqlite:{}?mode=rwc", config.database_path.display());
         let db = Database::new(&database_url).await?;
-        
+
         Ok(Self { db, config })
     }
 

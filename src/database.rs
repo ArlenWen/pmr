@@ -44,7 +44,9 @@ pub struct Database {
 
 impl Database {
     pub async fn new(database_url: &str) -> Result<Self> {
-        let pool = SqlitePool::connect(database_url).await?;
+        // Add more detailed error context for database connection
+        let pool = SqlitePool::connect(database_url).await
+            .map_err(|e| Error::Other(format!("Failed to connect to database at '{}': {}", database_url, e)))?;
         let db = Self { pool };
         db.migrate().await?;
         Ok(db)

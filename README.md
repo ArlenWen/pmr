@@ -44,6 +44,13 @@ pmr start my-app ./app.sh -w /path/to/workdir
 
 # 复杂示例
 pmr start nginx nginx -e NGINX_PORT=80 -w /etc/nginx
+
+# 带有参数的命令（参数包含 - 或 --）
+pmr start web-server python3 -m http.server --bind 127.0.0.1 8080
+pmr start file-list ls -la --color=auto
+
+# 如果需要传递 --help 参数，使用 -- 分隔符
+pmr start help-cmd -- curl --help
 ```
 
 ### 查看进程列表
@@ -171,6 +178,7 @@ pmr list
 - **数据库**: SQLite 数据库存储进程元数据，支持并发访问
 - **日志管理**: 自动重定向 stdout/stderr 到统一的日志文件
 - **状态监控**: 使用系统调用检查进程是否仍在运行
+- **参数解析**: 支持传递带有 `-` 和 `--` 的命令参数，自动区分 pmr 选项和目标命令参数
 
 ## 构建要求
 

@@ -19,6 +19,7 @@ pub enum Commands {
         /// Command to execute
         command: String,
         /// Command arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
         /// Environment variables (key=value format)
         #[arg(short, long)]
