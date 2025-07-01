@@ -31,19 +31,22 @@ cargo install --path .
 
 ```bash
 # 基本用法
-pmr start <进程名> <命令> [参数...]
+pmr start [选项] <进程名> <命令> [参数...]
 
 # 示例：启动一个简单的进程
 pmr start my-sleep sleep 60
 
 # 使用环境变量
-pmr start web-server python3 server.py -e PORT=8080 -e DEBUG=true
+pmr start -e PORT=8080 -e DEBUG=true web-server python3 server.py
 
 # 指定工作目录
-pmr start my-app ./app.sh -w /path/to/workdir
+pmr start -w /path/to/workdir my-app ./app.sh
+
+# 指定自定义日志目录
+pmr start --log-dir /var/log/myapp my-app ./app.sh
 
 # 复杂示例
-pmr start nginx nginx -e NGINX_PORT=80 -w /etc/nginx
+pmr start -e NGINX_PORT=80 -w /etc/nginx --log-dir /var/log/nginx nginx nginx
 
 # 带有参数的命令（参数包含 - 或 --）
 pmr start web-server python3 -m http.server --bind 127.0.0.1 8080
@@ -96,6 +99,12 @@ pmr logs <进程名>
 
 # 查看最后 50 行
 pmr logs <进程名> -n 50
+
+# 查看轮转的日志文件
+pmr logs <进程名> --rotated
+
+# 手动轮转日志文件
+pmr logs <进程名> --rotate
 ```
 
 ### 停止进程
@@ -121,7 +130,17 @@ pmr delete <进程名>
 PMR 使用以下目录结构：
 
 - 数据库文件: `~/.pmr/processes.db`
-- 日志目录: `~/.pmr/logs/` (每个进程一个 `.log` 文件，包含 stdout 和 stderr)
+- 默认日志目录: `./logs/` (相对于当前工作目录)
+- 自定义日志目录: 可通过 `--log-dir` 参数指定
+
+### 日志管理
+
+- **日志文件**: 每个进程一个 `.log` 文件，包含 stdout 和 stderr
+- **日志轮转**: 支持自动和手动日志轮转
+  - 默认最大文件大小: 10MB
+  - 默认保留轮转文件数: 5个
+  - 轮转文件命名: `进程名.1.log`, `进程名.2.log`, 等
+- **日志目录分离**: 日志文件和数据库文件存储在不同目录
 
 这些目录会在首次运行时自动创建。
 
@@ -166,10 +185,32 @@ pmr start postgres postgres -D /var/lib/postgresql/data
 pmr start redis redis-server /etc/redis/redis.conf
 
 # 启动应用服务器
-pmr start app-server npm start -e NODE_ENV=development -w /path/to/app
+pmr start -e NODE_ENV=development -w /path/to/app app-server npm start
 
 # 查看所有服务状态
 pmr list
+```
+
+### 4. 日志管理
+
+```bash
+# 启动一个会产生大量日志的服务，使用自定义日志目录
+pmr start --log-dir /var/log/myservice -e LOG_LEVEL=debug my-service ./service.sh
+
+# 查看当前日志
+pmr logs my-service
+
+# 查看最后100行日志
+pmr logs my-service -n 100
+
+# 手动轮转日志文件
+pmr logs my-service --rotate
+
+# 查看所有轮转的日志文件
+pmr logs my-service --rotated
+
+# 查看进程状态（包含日志文件路径）
+pmr status my-service
 ```
 
 ## 技术细节

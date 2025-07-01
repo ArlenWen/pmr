@@ -12,9 +12,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let process_manager = ProcessManager::new(config).await?;
 
     match cli.command {
-        Commands::Start { name, command, args, env, workdir } => {
+        Commands::Start { name, command, args, env, workdir, log_dir } => {
             let env_vars = Commands::parse_env_vars(env);
-            process_manager.start_process(&name, &command, args, env_vars, workdir).await?;
+            process_manager.start_process(&name, &command, args, env_vars, workdir, log_dir).await?;
         }
         Commands::Stop { name } => {
             process_manager.stop_process(&name).await?;
@@ -62,9 +62,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Logs { name, lines, .. } => {
-            let logs = process_manager.get_process_logs(&name, lines).await?;
-            println!("{}", logs);
+        Commands::Logs { name, lines, rotated, rotate } => {
+            if rotate {
+                process_manager.rotate_process_logs(&name).await?;
+            } else if rotated {
+                let rotated_logs = process_manager.get_rotated_logs(&name).await?;
+                if rotated_logs.is_empty() {
+                    println!("No rotated log files found for process '{}'", name);
+                } else {
+                    for log in rotated_logs {
+                        println!("{}", log);
+                    }
+                }
+            } else {
+                let logs = process_manager.get_process_logs(&name, lines).await?;
+                println!("{}", logs);
+            }
         }
     }
 

@@ -1,16 +1,19 @@
 use crate::{
     config::Config,
     database::{Database, ProcessRecord, ProcessStatus},
+    log_rotation::LogRotator,
     Error, Result,
 };
 use chrono::Utc;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use uuid::Uuid;
 
 pub struct ProcessManager {
     db: Database,
     config: Config,
+    log_rotator: LogRotator,
 }
 
 impl ProcessManager {
@@ -19,8 +22,9 @@ impl ProcessManager {
         // Add create_if_missing parameter to SQLite URL to automatically create the database file
         let database_url = format!("sqlite:{}?mode=rwc", config.database_path.display());
         let db = Database::new(&database_url).await?;
+        let log_rotator = LogRotator::new(config.log_rotation.clone());
 
-        Ok(Self { db, config })
+        Ok(Self { db, config, log_rotator })
     }
 
     pub async fn start_process(
@@ -30,6 +34,7 @@ impl ProcessManager {
         args: Vec<String>,
         env_vars: HashMap<String, String>,
         working_dir: Option<String>,
+        log_dir: Option<String>,
     ) -> Result<()> {
         // Check if process already exists
         if self.db.get_process_by_name(name).await?.is_some() {
@@ -42,7 +47,22 @@ impl ProcessManager {
             .to_string_lossy()
             .to_string());
 
-        let log_path = self.config.log_dir.join(format!("{}.log", name));
+        // Determine log directory - use custom log_dir if provided, otherwise use default
+        let log_directory = if let Some(custom_log_dir) = log_dir {
+            PathBuf::from(custom_log_dir)
+        } else {
+            self.config.default_log_dir.clone()
+        };
+
+        // Ensure the log directory exists
+        self.config.ensure_log_directory(&log_directory)?;
+
+        let log_path = log_directory.join(format!("{}.log", name));
+
+        // Check if log rotation is needed for existing log file
+        if log_path.exists() {
+            self.log_rotator.rotate_if_needed(&log_path).await?;
+        }
 
         // Create log file
         tokio::fs::File::create(&log_path).await?;
@@ -155,6 +175,11 @@ impl ProcessManager {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
 
+        // Extract log directory from the existing log path
+        let log_dir = PathBuf::from(&process.log_path)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string());
+
         // Delete the process record
         self.db.delete_process(name).await?;
 
@@ -165,6 +190,7 @@ impl ProcessManager {
             process.args,
             process.env_vars,
             Some(process.working_dir),
+            log_dir,
         ).await?;
 
         Ok(())
@@ -291,6 +317,65 @@ impl ProcessManager {
     async fn is_process_running(&self, pid: u32) -> bool {
         let result = unsafe { libc::kill(pid as i32, 0) };
         result == 0
+    }
+
+    /// Get rotated log files for a process
+    pub async fn get_rotated_logs(&self, name: &str) -> Result<Vec<String>> {
+        let process = self.db.get_process_by_name(name).await?
+            .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
+
+        let log_path = PathBuf::from(&process.log_path);
+        let rotated_files = self.log_rotator.get_rotated_files(&log_path)?;
+
+        let mut logs = Vec::new();
+        for file_path in rotated_files {
+            let content = match tokio::fs::read_to_string(&file_path).await {
+                Ok(content) => content,
+                Err(_) => {
+                    // Try to read as bytes and convert to string, replacing invalid UTF-8
+                    match tokio::fs::read(&file_path).await {
+                        Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                        Err(_) => continue,
+                    }
+                }
+            };
+            logs.push(format!("=== {} ===\n{}", file_path.display(), content));
+        }
+
+        Ok(logs)
+    }
+
+    /// Manually rotate log file for a process
+    pub async fn rotate_process_logs(&self, name: &str) -> Result<()> {
+        let process = self.db.get_process_by_name(name).await?
+            .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
+
+        let log_path = PathBuf::from(&process.log_path);
+        self.log_rotator.force_rotate(&log_path).await?;
+
+        println!("Log rotation completed for process '{}'", name);
+        Ok(())
+    }
+
+    /// Get log rotation status for a process
+    pub async fn get_log_rotation_status(&self, name: &str) -> Result<String> {
+        let process = self.db.get_process_by_name(name).await?
+            .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
+
+        let log_path = PathBuf::from(&process.log_path);
+        let current_size = self.log_rotator.get_log_size(&log_path)?;
+        let needs_rotation = self.log_rotator.needs_rotation(&log_path)?;
+        let rotated_files = self.log_rotator.get_rotated_files(&log_path)?;
+
+        let status = format!(
+            "Log file: {}\nCurrent size: {} bytes\nNeeds rotation: {}\nRotated files: {}",
+            log_path.display(),
+            current_size,
+            if needs_rotation { "Yes" } else { "No" },
+            rotated_files.len()
+        );
+
+        Ok(status)
     }
 }
 

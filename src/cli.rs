@@ -16,17 +16,20 @@ pub enum Commands {
     Start {
         /// Process name
         name: String,
-        /// Command to execute
-        command: String,
-        /// Command arguments
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
         /// Environment variables (key=value format)
         #[arg(short, long)]
         env: Vec<String>,
         /// Working directory
         #[arg(short, long)]
         workdir: Option<String>,
+        /// Log directory for this process (default: ./logs)
+        #[arg(long)]
+        log_dir: Option<String>,
+        /// Command to execute
+        command: String,
+        /// Command arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Stop a running process
     Stop {
@@ -57,6 +60,12 @@ pub enum Commands {
         /// Number of lines to show (default: all)
         #[arg(short = 'n', long)]
         lines: Option<usize>,
+        /// Show rotated log files
+        #[arg(long)]
+        rotated: bool,
+        /// Manually rotate log file
+        #[arg(long)]
+        rotate: bool,
     },
 }
 
