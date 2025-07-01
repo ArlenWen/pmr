@@ -2,9 +2,14 @@
 name = "pmr"
 version = "0.1.0"
 edition = "2021"
+authors = ["ArlenWen"]
+license = "MIT"
+description = "A command-line process management tool written in Rust with system-level process management, isolated environment variables, and concurrent operations support."
+repository = "https://github.com/ArlenWen/pmr"
+keywords = ["process", "management", "cli", "system", "daemon"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-anyhow = "1.0.98"
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.40", features = ["derive"] }
 libc = "0.2.174"
