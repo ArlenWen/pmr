@@ -1,4 +1,4 @@
-# PMR - Process Management Tool
+# PMR - Process Manager in Rust
 
 PMR (Process Manager in Rust) 是一个用 Rust 编写的命令行进程管理工具，支持系统级进程管理、独立环境变量、日志管理和并发操作。
 
@@ -10,6 +10,10 @@ PMR (Process Manager in Rust) 是一个用 Rust 编写的命令行进程管理�
 - **日志管理**: 自动捕获和管理进程的 stdout 和 stderr
 - **SQLite 存储**: 使用 SQLite 数据库存储进程信息，支持并发操作
 - **状态监控**: 实时监控进程状态
+- **日志轮转**: 支持自动和手动日志轮转
+- **(TODO)定时任务**: 支持定时执行任务
+- **(TODO)进程组管理**: 支持进程组管理，支持启动、停止、重启、删除进程组
+- **(TODO)HTTP 接口**: 通过 HTTP 接口管理进程，支持 RESTful API
 
 ## 安装
 
