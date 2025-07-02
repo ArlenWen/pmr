@@ -34,7 +34,7 @@ fn validate_auth(headers: &HeaderMap, auth_manager: &Arc<Mutex<AuthManager>>) ->
 
     let token = &auth_header[7..];
     let auth_manager = auth_manager.lock().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if !auth_manager.validate_token(token) {
+    if !auth_manager.validate_token_sync(token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 

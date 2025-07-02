@@ -66,15 +66,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         #[cfg(feature = "http-api")]
-        Commands::Serve { port } => {
-            let api_server = ApiServer::new(process_manager, port)?;
-            println!("Starting PMR HTTP API server on port {}...", port);
-            println!("Use 'pmr auth generate <name>' to create API tokens for authentication");
-            api_server.start().await?;
+        Commands::Serve { port, daemon } => {
+            if daemon {
+                handle_serve_daemon(port, &process_manager, &formatter).await?;
+            } else {
+                let api_server = ApiServer::new(process_manager, port)?;
+                println!("Starting PMR HTTP API server on port {}...", port);
+                println!("Use 'pmr auth generate <name>' to create API tokens for authentication");
+                api_server.start().await?;
+            }
+        }
+        #[cfg(feature = "http-api")]
+        Commands::ServeStatus => {
+            handle_serve_status(&process_manager, &formatter).await?;
+        }
+        #[cfg(feature = "http-api")]
+        Commands::ServeStop => {
+            handle_serve_stop(&process_manager, &formatter).await?;
+        }
+        #[cfg(feature = "http-api")]
+        Commands::ServeRestart { port } => {
+            handle_serve_restart(port, &process_manager, &formatter).await?;
         }
         #[cfg(feature = "http-api")]
         Commands::Auth { command } => {
-            handle_auth_command(command).await?;
+            handle_auth_command(command, &process_manager).await?;
         }
     }
 
@@ -82,12 +98,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(feature = "http-api")]
-async fn handle_auth_command(command: AuthCommands) -> Result<(), Box<dyn std::error::Error>> {
-    let mut auth_manager = AuthManager::new()?;
+async fn handle_auth_command(command: AuthCommands, process_manager: &ProcessManager) -> Result<(), Box<dyn std::error::Error>> {
+    let database = process_manager.get_database();
+    let auth_manager = AuthManager::new(database);
 
     match command {
         AuthCommands::Generate { name, expires_in } => {
-            let token = auth_manager.generate_token(name.clone(), expires_in)?;
+            let token = auth_manager.generate_token(name.clone(), expires_in).await?;
             println!("Generated new API token:");
             println!("Name: {}", token.name);
             println!("Token: {}", token.token);
@@ -102,7 +119,7 @@ async fn handle_auth_command(command: AuthCommands) -> Result<(), Box<dyn std::e
             println!("Authorization: Bearer {}", token.token);
         }
         AuthCommands::List => {
-            let tokens = auth_manager.list_tokens();
+            let tokens = auth_manager.list_tokens().await?;
             if tokens.is_empty() {
                 println!("No API tokens found.");
             } else {
@@ -123,7 +140,7 @@ async fn handle_auth_command(command: AuthCommands) -> Result<(), Box<dyn std::e
             }
         }
         AuthCommands::Revoke { token } => {
-            match auth_manager.revoke_token(&token) {
+            match auth_manager.revoke_token(&token).await {
                 Ok(_) => println!("Token revoked successfully"),
                 Err(e) => println!("Error revoking token: {}", e),
             }
@@ -131,4 +148,112 @@ async fn handle_auth_command(command: AuthCommands) -> Result<(), Box<dyn std::e
     }
 
     Ok(())
+}
+
+#[cfg(feature = "http-api")]
+const HTTP_SERVER_PROCESS_NAME: &str = "__pmr_http_server__";
+
+#[cfg(feature = "http-api")]
+async fn handle_serve_daemon(
+    port: u16,
+    process_manager: &ProcessManager,
+    formatter: &Formatter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Check if HTTP server is already running
+    if let Ok(process) = process_manager.get_process_status(HTTP_SERVER_PROCESS_NAME).await {
+        if process.status == pmr::database::ProcessStatus::Running {
+            println!("{}", formatter.format_error_message("HTTP server is already running. Use 'pmr serve-status' to check status or 'pmr serve-stop' to stop it."));
+            return Ok(());
+        } else {
+            // Process exists but is not running, delete it first
+            let _ = process_manager.delete_process(HTTP_SERVER_PROCESS_NAME).await;
+        }
+    }
+
+    // Get current executable path
+    let current_exe = std::env::current_exe()?;
+    let current_exe_str = current_exe.to_string_lossy().to_string();
+
+    // Start HTTP server as a managed process
+    let args = vec!["serve".to_string(), "--port".to_string(), port.to_string()];
+    let env_vars = std::collections::HashMap::new();
+
+    let message = process_manager
+        .start_process(
+            HTTP_SERVER_PROCESS_NAME,
+            &current_exe_str,
+            args,
+            env_vars,
+            None,
+            None,
+        )
+        .await?;
+
+    println!("{}", formatter.format_success_message(&message));
+    println!("HTTP server started in daemon mode on port {}", port);
+    println!("Use 'pmr serve-status' to check status");
+    println!("Use 'pmr serve-stop' to stop the server");
+
+    Ok(())
+}
+
+#[cfg(feature = "http-api")]
+async fn handle_serve_status(
+    process_manager: &ProcessManager,
+    formatter: &Formatter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match process_manager.get_process_status(HTTP_SERVER_PROCESS_NAME).await {
+        Ok(process) => {
+            println!("{}", formatter.format_process_status(&process));
+        }
+        Err(_) => {
+            println!("{}", formatter.format_error_message("HTTP server is not running"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "http-api")]
+async fn handle_serve_stop(
+    process_manager: &ProcessManager,
+    formatter: &Formatter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match process_manager.stop_process(HTTP_SERVER_PROCESS_NAME).await {
+        Ok(message) => {
+            println!("{}", formatter.format_success_message(&message));
+        }
+        Err(_) => {
+            println!("{}", formatter.format_error_message("HTTP server is not running"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "http-api")]
+async fn handle_serve_restart(
+    port: u16,
+    process_manager: &ProcessManager,
+    formatter: &Formatter,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Check if server exists and try to stop it
+    match process_manager.get_process_status(HTTP_SERVER_PROCESS_NAME).await {
+        Ok(process) => {
+            if process.status == pmr::database::ProcessStatus::Running {
+                println!("Stopping HTTP server...");
+                let _ = process_manager.stop_process(HTTP_SERVER_PROCESS_NAME).await;
+                // Wait a moment for the process to fully stop
+                tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+            }
+        }
+        Err(_) => {
+            // Server doesn't exist, that's fine
+        }
+    }
+
+    // Delete the old process record if it exists
+    let _ = process_manager.delete_process(HTTP_SERVER_PROCESS_NAME).await;
+
+    // Start the server again
+    println!("Starting HTTP server...");
+    handle_serve_daemon(port, process_manager, formatter).await
 }

@@ -4,6 +4,17 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use crate::{Error, Result};
 
+#[cfg(feature = "http-api")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiToken {
+    pub id: String,
+    pub token: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "http-api", derive(utoipa::ToSchema))]
 pub struct ProcessRecord {
@@ -40,6 +51,7 @@ impl std::fmt::Display for ProcessStatus {
     }
 }
 
+#[derive(Clone)]
 pub struct Database {
     pool: SqlitePool,
 }
@@ -73,6 +85,17 @@ impl Database {
     }
 
     async fn migrate(&self) -> Result<()> {
+        // Migrate processes table
+        self.migrate_processes_table().await?;
+
+        // Migrate API tokens table (if http-api feature is enabled)
+        #[cfg(feature = "http-api")]
+        self.migrate_api_tokens_table().await?;
+
+        Ok(())
+    }
+
+    async fn migrate_processes_table(&self) -> Result<()> {
         // Check if the table exists and what columns it has
         let table_info = sqlx::query("PRAGMA table_info(processes)")
             .fetch_all(&self.pool)
@@ -150,6 +173,42 @@ impl Database {
             .await?;
         }
         // If has_new_column is true, table is already in the correct format
+
+        Ok(())
+    }
+
+    #[cfg(feature = "http-api")]
+    async fn migrate_api_tokens_table(&self) -> Result<()> {
+        // Check if the api_tokens table exists
+        let table_exists = sqlx::query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='api_tokens'"
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some();
+
+        if !table_exists {
+            // Create api_tokens table
+            sqlx::query(
+                r#"
+                CREATE TABLE api_tokens (
+                    id TEXT PRIMARY KEY,
+                    token TEXT UNIQUE NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1
+                )
+                "#,
+            )
+            .execute(&self.pool)
+            .await?;
+
+            // Create index on token for faster lookups
+            sqlx::query("CREATE INDEX idx_api_tokens_token ON api_tokens(token)")
+                .execute(&self.pool)
+                .await?;
+        }
 
         Ok(())
     }
@@ -316,6 +375,103 @@ impl Database {
             created_at,
             updated_at,
             log_path: row.get("log_path"),
+        })
+    }
+
+    // API Token methods (only available with http-api feature)
+    #[cfg(feature = "http-api")]
+    pub async fn insert_api_token(&self, token: &ApiToken) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO api_tokens (id, token, name, created_at, expires_at, is_active)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&token.id)
+        .bind(&token.token)
+        .bind(&token.name)
+        .bind(token.created_at.to_rfc3339())
+        .bind(token.expires_at.map(|e| e.to_rfc3339()))
+        .bind(if token.is_active { 1 } else { 0 })
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "http-api")]
+    pub async fn get_api_token_by_token(&self, token: &str) -> Result<Option<ApiToken>> {
+        let row = sqlx::query("SELECT * FROM api_tokens WHERE token = ?")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        if let Some(row) = row {
+            Ok(Some(self.row_to_api_token(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "http-api")]
+    pub async fn get_all_api_tokens(&self) -> Result<Vec<ApiToken>> {
+        let rows = sqlx::query("SELECT * FROM api_tokens ORDER BY created_at DESC")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut tokens = Vec::new();
+        for row in rows {
+            tokens.push(self.row_to_api_token(row)?);
+        }
+        Ok(tokens)
+    }
+
+    #[cfg(feature = "http-api")]
+    pub async fn update_api_token_status(&self, token: &str, is_active: bool) -> Result<bool> {
+        let result = sqlx::query("UPDATE api_tokens SET is_active = ? WHERE token = ?")
+            .bind(if is_active { 1 } else { 0 })
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    #[cfg(feature = "http-api")]
+    pub async fn delete_api_token(&self, token: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM api_tokens WHERE token = ?")
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    #[cfg(feature = "http-api")]
+    fn row_to_api_token(&self, row: sqlx::sqlite::SqliteRow) -> Result<ApiToken> {
+        let created_at_str: String = row.get("created_at");
+        let expires_at_str: Option<String> = row.get("expires_at");
+        let is_active_i64: i64 = row.get("is_active");
+
+        let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+            .map_err(|e| Error::Other(format!("Failed to parse created_at: {}", e)))?
+            .with_timezone(&Utc);
+
+        let expires_at = if let Some(expires_str) = expires_at_str {
+            Some(DateTime::parse_from_rfc3339(&expires_str)
+                .map_err(|e| Error::Other(format!("Failed to parse expires_at: {}", e)))?
+                .with_timezone(&Utc))
+        } else {
+            None
+        };
+
+        Ok(ApiToken {
+            id: row.get("id"),
+            token: row.get("token"),
+            name: row.get("name"),
+            created_at,
+            expires_at,
+            is_active: is_active_i64 != 0,
         })
     }
 }

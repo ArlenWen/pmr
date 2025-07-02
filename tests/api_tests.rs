@@ -4,6 +4,7 @@ mod http_api_tests {
         api::{ApiServer, AuthManager},
         config::{Config, LogRotationConfig},
         process::ProcessManager,
+        database::Database,
     };
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -26,7 +27,8 @@ mod http_api_tests {
             });
 
         let process_manager = Arc::new(ProcessManager::new(config).await.unwrap());
-        let auth_manager = Arc::new(Mutex::new(AuthManager::new().unwrap()));
+        let database = process_manager.get_database();
+        let auth_manager = Arc::new(Mutex::new(AuthManager::new(database)));
 
         (process_manager, auth_manager, temp_dir)
     }
@@ -53,60 +55,63 @@ mod http_api_tests {
 
     #[tokio::test]
     async fn test_auth_manager_token_generation() {
-        let _temp_dir = TempDir::new().unwrap();
-
-        let mut auth_manager = AuthManager::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let database_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let database = std::sync::Arc::new(Database::new(&database_url).await.unwrap());
+        let auth_manager = AuthManager::new(database);
 
         // Generate a token
-        let api_token = auth_manager.generate_token("test_user".to_string(), None).unwrap();
+        let api_token = auth_manager.generate_token("test_user".to_string(), None).await.unwrap();
         assert!(!api_token.token.is_empty());
 
         // Validate the token
-        assert!(auth_manager.validate_token(&api_token.token));
+        assert!(auth_manager.validate_token(&api_token.token).await);
 
         // Invalid token should fail
-        assert!(!auth_manager.validate_token("invalid_token"));
+        assert!(!auth_manager.validate_token("invalid_token").await);
     }
 
     #[tokio::test]
     async fn test_auth_manager_token_revocation() {
-        let _temp_dir = TempDir::new().unwrap();
-
-        let mut auth_manager = AuthManager::new().unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let database_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let database = std::sync::Arc::new(Database::new(&database_url).await.unwrap());
+        let auth_manager = AuthManager::new(database);
 
         // Generate a token
-        let api_token = auth_manager.generate_token("test_user".to_string(), None).unwrap();
-        assert!(auth_manager.validate_token(&api_token.token));
+        let api_token = auth_manager.generate_token("test_user".to_string(), None).await.unwrap();
+        assert!(auth_manager.validate_token(&api_token.token).await);
 
         // Revoke the token
-        auth_manager.revoke_token(&api_token.token).unwrap();
+        auth_manager.revoke_token(&api_token.token).await.unwrap();
 
         // Token should no longer be valid
-        assert!(!auth_manager.validate_token(&api_token.token));
+        assert!(!auth_manager.validate_token(&api_token.token).await);
 
         // Revoking non-existent token should return error
-        let result = auth_manager.revoke_token("nonexistent");
+        let result = auth_manager.revoke_token("nonexistent").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_auth_manager_list_tokens() {
-        // Use a unique temporary directory for this test
         let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let database_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let database = std::sync::Arc::new(Database::new(&database_url).await.unwrap());
+        let auth_manager = AuthManager::new(database);
 
-        // Set HOME to temp directory to avoid conflicts with other tests
-        std::env::set_var("HOME", temp_dir.path());
-
-        let mut auth_manager = AuthManager::new().unwrap();
-
-        // Initially should be empty (or may have tokens from previous tests)
-        let initial_count = auth_manager.list_tokens().len();
+        // Initially should be empty
+        let initial_tokens = auth_manager.list_tokens().await.unwrap();
+        let initial_count = initial_tokens.len();
 
         // Generate some tokens
-        let api_token1 = auth_manager.generate_token("user1".to_string(), None).unwrap();
-        let api_token2 = auth_manager.generate_token("user2".to_string(), None).unwrap();
+        let api_token1 = auth_manager.generate_token("user1".to_string(), None).await.unwrap();
+        let api_token2 = auth_manager.generate_token("user2".to_string(), None).await.unwrap();
 
-        let tokens = auth_manager.list_tokens();
+        let tokens = auth_manager.list_tokens().await.unwrap();
         // Should have initial count + 2 new tokens
         assert_eq!(tokens.len(), initial_count + 2);
 
@@ -118,13 +123,20 @@ mod http_api_tests {
 
     #[tokio::test]
     async fn test_auth_manager_persistence() {
-        // Note: This test is simplified since AuthManager now uses a default path
-        // In a real scenario, we'd need to mock the file system or use a different approach
-        let mut auth_manager = AuthManager::new().unwrap();
-        let api_token = auth_manager.generate_token("test_user".to_string(), None).unwrap();
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let database_url = format!("sqlite:{}?mode=rwc", db_path.display());
+        let database = std::sync::Arc::new(Database::new(&database_url).await.unwrap());
+        let auth_manager = AuthManager::new(database.clone());
+
+        let api_token = auth_manager.generate_token("test_user".to_string(), None).await.unwrap();
 
         // Verify token is valid
-        assert!(auth_manager.validate_token(&api_token.token));
+        assert!(auth_manager.validate_token(&api_token.token).await);
+
+        // Create a new AuthManager with the same database to test persistence
+        let auth_manager2 = AuthManager::new(database);
+        assert!(auth_manager2.validate_token(&api_token.token).await);
     }
 
     // Integration test with actual HTTP requests would require starting the server
@@ -137,8 +149,8 @@ mod http_api_tests {
         
         // Generate an auth token
         let api_token = {
-            let mut auth = auth_manager.lock().unwrap();
-            auth.generate_token("test_user".to_string(), None).unwrap()
+            let auth = auth_manager.lock().unwrap();
+            auth.generate_token("test_user".to_string(), None).await.unwrap()
         };
         
         // Start a test process
@@ -166,7 +178,8 @@ mod http_api_tests {
         
         // Validate the auth token
         let auth = auth_manager.lock().unwrap();
-        assert!(auth.validate_token(&api_token.token));
+        let is_valid = auth.validate_token(&api_token.token).await;
+        assert!(is_valid);
         
         // Clean up
         drop(auth);

@@ -155,11 +155,33 @@ PMR 支持可选的 HTTP API 功能，需要在编译时启用 `http-api` 特性
 ### 启动 API 服务器
 
 ```bash
-# 启动 HTTP API 服务器（默认端口 8080）
+# 启动 HTTP API 服务器（前台运行，默认端口 8080）
 pmr serve
 
 # 指定端口
 pmr serve --port 3000
+
+# 启动 HTTP API 服务器（后台运行）
+pmr serve --daemon
+
+# 后台运行并指定端口
+pmr serve --daemon --port 3000
+```
+
+### 管理 API 服务器
+
+```bash
+# 查看 HTTP API 服务器状态
+pmr serve-status
+
+# 停止 HTTP API 服务器
+pmr serve-stop
+
+# 重启 HTTP API 服务器（默认端口 8080）
+pmr serve-restart
+
+# 重启 HTTP API 服务器并指定端口
+pmr serve-restart --port 3000
 ```
 
 ### 管理 API 认证令牌

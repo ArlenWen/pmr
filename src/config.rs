@@ -15,19 +15,14 @@ pub struct Config {
 pub struct ApiConfig {
     pub enabled: bool,
     pub port: u16,
-    pub auth_tokens_path: PathBuf,
 }
 
 #[cfg(feature = "http-api")]
 impl Default for ApiConfig {
     fn default() -> Self {
-        let home_dir = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        let pmr_dir = PathBuf::from(home_dir).join(".pmr");
-
         Self {
             enabled: false,
             port: 8080,
-            auth_tokens_path: pmr_dir.join("api_tokens.json"),
         }
     }
 }

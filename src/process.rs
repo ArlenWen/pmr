@@ -52,9 +52,9 @@ impl ProcessManager {
         Ok(process_manager)
     }
 
-    #[cfg(test)]
-    pub fn get_database(&self) -> &Database {
-        &self.db
+    #[cfg(any(test, feature = "http-api"))]
+    pub fn get_database(&self) -> std::sync::Arc<Database> {
+        std::sync::Arc::new(self.db.clone())
     }
 
     /// Start background task to reap zombie processes

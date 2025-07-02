@@ -28,7 +28,8 @@ pub struct ApiServer {
 #[cfg(feature = "http-api")]
 impl ApiServer {
     pub fn new(process_manager: ProcessManager, port: u16) -> Result<Self> {
-        let auth_manager = AuthManager::new()?;
+        let database = process_manager.get_database();
+        let auth_manager = AuthManager::new(database);
         Ok(Self {
             process_manager: Arc::new(process_manager),
             auth_manager: Arc::new(Mutex::new(auth_manager)),

@@ -118,6 +118,22 @@ pub enum Commands {
         /// Port to bind the API server (default: 8080)
         #[arg(short, long, default_value = "8080")]
         port: u16,
+        /// Run server in daemon mode (background)
+        #[arg(short, long)]
+        daemon: bool,
+    },
+    #[cfg(feature = "http-api")]
+    /// Show HTTP API server status
+    ServeStatus,
+    #[cfg(feature = "http-api")]
+    /// Stop HTTP API server
+    ServeStop,
+    #[cfg(feature = "http-api")]
+    /// Restart HTTP API server
+    ServeRestart {
+        /// Port to bind the API server (default: 8080)
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
     },
     #[cfg(feature = "http-api")]
     /// Manage API authentication tokens
