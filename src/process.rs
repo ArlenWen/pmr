@@ -8,7 +8,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +26,8 @@ pub struct ProcessManager {
     db: Database,
     config: Config,
     log_rotator: LogRotator,
+    // Track running processes to properly reap them
+    running_processes: Arc<Mutex<HashMap<u32, tokio::process::Child>>>,
 }
 
 impl ProcessManager {
@@ -33,13 +37,59 @@ impl ProcessManager {
         let database_url = format!("sqlite:{}?mode=rwc", config.database_path.display());
         let db = Database::new(&database_url).await?;
         let log_rotator = LogRotator::new(config.log_rotation.clone());
+        let running_processes = Arc::new(Mutex::new(HashMap::new()));
 
-        Ok(Self { db, config, log_rotator })
+        let process_manager = Self {
+            db,
+            config,
+            log_rotator,
+            running_processes: running_processes.clone()
+        };
+
+        // Start background task to reap zombie processes
+        process_manager.start_process_reaper().await;
+
+        Ok(process_manager)
     }
 
     #[cfg(test)]
     pub fn get_database(&self) -> &Database {
         &self.db
+    }
+
+    /// Start background task to reap zombie processes
+    async fn start_process_reaper(&self) {
+        let running_processes = self.running_processes.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let mut processes = running_processes.lock().await;
+                let mut to_remove = Vec::new();
+
+                for (pid, child) in processes.iter_mut() {
+                    // Try to reap the process without blocking
+                    match child.try_wait() {
+                        Ok(Some(_exit_status)) => {
+                            // Process has terminated, mark for removal
+                            to_remove.push(*pid);
+                        }
+                        Ok(None) => {
+                            // Process is still running, continue
+                        }
+                        Err(_) => {
+                            // Error checking process status, assume it's dead
+                            to_remove.push(*pid);
+                        }
+                    }
+                }
+
+                // Remove reaped processes
+                for pid in to_remove {
+                    processes.remove(&pid);
+                }
+            }
+        });
     }
 
     pub async fn start_process(
@@ -101,13 +151,13 @@ impl ProcessManager {
         created_log_file = true;
 
         // Use setsid to create a new session and detach from terminal
-        let mut cmd = Command::new("setsid");
+        let mut cmd = tokio::process::Command::new("setsid");
         cmd.arg(command)
             .args(&args)
             .current_dir(&working_dir)
             .envs(&env_vars);
 
-        // Set up stdio - if this fails, we need to rollback
+        // Set up stdio - redirect to log file
         let stdout_file = match std::fs::File::create(&log_path) {
             Ok(file) => file,
             Err(e) => {
@@ -133,9 +183,15 @@ impl ProcessManager {
 
         let (pid, initial_status) = match child {
             Ok(child) => {
-                let pid = child.id();
-                // Detach the process - it will continue running independently
-                std::mem::forget(child);
+                let pid = child.id().ok_or_else(|| {
+                    Error::Other("Failed to get process ID".to_string())
+                })?;
+
+                // Store the child process for proper reaping
+                {
+                    let mut processes = self.running_processes.lock().await;
+                    processes.insert(pid, child);
+                }
 
                 // Wait a moment to check if the process actually started successfully
                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
@@ -253,13 +309,39 @@ impl ProcessManager {
             .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
 
         if let Some(pid) = process.pid {
-            // Send SIGTERM to the process
-            let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            if result == 0 {
-                self.db.update_process_status(name, ProcessStatus::Stopped, Some(pid)).await?;
-                Ok(format!("Process '{}' stopped", name))
+            // First try to get the child process from our tracking
+            let mut child_opt = {
+                let mut processes = self.running_processes.lock().await;
+                processes.remove(&pid)
+            };
+
+            if let Some(ref mut child) = child_opt {
+                // We have the child process, use tokio's kill method
+                match child.kill().await {
+                    Ok(_) => {
+                        // Wait for the process to actually terminate
+                        let _ = child.wait().await;
+                        self.db.update_process_status(name, ProcessStatus::Stopped, Some(pid)).await?;
+                        Ok(format!("Process '{}' stopped", name))
+                    }
+                    Err(e) => {
+                        // Re-insert the child back if kill failed
+                        let mut processes = self.running_processes.lock().await;
+                        processes.insert(pid, child_opt.unwrap());
+                        Err(Error::Other(format!("Failed to stop process '{}' with PID {}: {}", name, pid, e)))
+                    }
+                }
             } else {
-                Err(Error::Other(format!("Failed to stop process '{}' with PID {}", name, pid)))
+                // Fallback to using libc::kill for processes not in our tracking
+                let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if result == 0 {
+                    // Wait a bit for the process to terminate
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    self.db.update_process_status(name, ProcessStatus::Stopped, Some(pid)).await?;
+                    Ok(format!("Process '{}' stopped", name))
+                } else {
+                    Err(Error::Other(format!("Failed to stop process '{}' with PID {}", name, pid)))
+                }
             }
         } else {
             Err(Error::InvalidProcessState(format!("Process '{}' has no PID", name)))
@@ -306,6 +388,10 @@ impl ProcessManager {
         if let Some(pid) = process.pid {
             if self.is_process_running(pid).await {
                 self.stop_process(name).await?;
+            } else {
+                // Process is not running, but remove it from tracking if present
+                let mut processes = self.running_processes.lock().await;
+                processes.remove(&pid);
             }
         }
 
@@ -390,11 +476,19 @@ impl ProcessManager {
         // Stop the process if it's running
         if let Some(pid) = process.pid {
             if self.is_process_running(pid).await {
-                // Send SIGTERM to stop the process
-                let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-                if result != 0 {
-                    // Process might already be stopped, continue with deletion
+                // Try to stop the process properly
+                if let Err(_) = self.stop_process(&process.name).await {
+                    // If proper stop fails, try direct kill
+                    let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                    if result == 0 {
+                        // Wait a bit for termination
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    }
                 }
+            } else {
+                // Process is not running, but remove it from tracking if present
+                let mut processes = self.running_processes.lock().await;
+                processes.remove(&pid);
             }
         }
 
