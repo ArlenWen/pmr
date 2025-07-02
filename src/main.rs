@@ -37,6 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let message = process_manager.delete_process(&name).await?;
             println!("{}", formatter.format_success_message(&message));
         }
+        Commands::Clear { all } => {
+            let result = process_manager.clear_processes(all).await?;
+            println!("{}", formatter.format_clear_result(&result));
+        }
         Commands::List => {
             let processes = process_manager.list_processes().await?;
             if processes.is_empty() {

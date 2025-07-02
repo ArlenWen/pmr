@@ -5,10 +5,20 @@ use crate::{
     Error, Result,
 };
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "http-api", derive(utoipa::ToSchema))]
+pub struct ClearResult {
+    pub cleared_count: usize,
+    pub cleared_processes: Vec<String>,
+    pub failed_processes: Vec<String>,
+    pub operation_type: String,
+}
 
 pub struct ProcessManager {
     db: Database,
@@ -25,6 +35,11 @@ impl ProcessManager {
         let log_rotator = LogRotator::new(config.log_rotation.clone());
 
         Ok(Self { db, config, log_rotator })
+    }
+
+    #[cfg(test)]
+    pub fn get_database(&self) -> &Database {
+        &self.db
     }
 
     pub async fn start_process(
@@ -54,27 +69,63 @@ impl ProcessManager {
             self.config.default_log_dir.clone()
         };
 
+        // Track resources created for potential rollback
+        let mut created_log_dir = false;
+        let mut created_log_file = false;
+        let inserted_db_record = false;
+
         // Ensure the log directory exists
-        self.config.ensure_log_directory(&log_directory)?;
+        let log_dir_existed = log_directory.exists();
+        if let Err(e) = self.config.ensure_log_directory(&log_directory) {
+            return Err(e);
+        }
+        if !log_dir_existed {
+            created_log_dir = true;
+        }
 
         let log_path = log_directory.join(format!("{}.log", name));
 
         // Check if log rotation is needed for existing log file
         if log_path.exists() {
-            self.log_rotator.rotate_if_needed(&log_path).await?;
+            if let Err(e) = self.log_rotator.rotate_if_needed(&log_path).await {
+                self.rollback_start_process(&id, &log_path, created_log_dir, created_log_file, inserted_db_record).await;
+                return Err(e);
+            }
         }
 
         // Create log file
-        tokio::fs::File::create(&log_path).await?;
+        if let Err(e) = tokio::fs::File::create(&log_path).await {
+            self.rollback_start_process(&id, &log_path, created_log_dir, created_log_file, inserted_db_record).await;
+            return Err(e.into());
+        }
+        created_log_file = true;
 
         // Use setsid to create a new session and detach from terminal
         let mut cmd = Command::new("setsid");
         cmd.arg(command)
             .args(&args)
             .current_dir(&working_dir)
-            .envs(&env_vars)
-            .stdout(Stdio::from(std::fs::File::create(&log_path)?))
-            .stderr(Stdio::from(std::fs::File::options().create(true).append(true).open(&log_path)?))
+            .envs(&env_vars);
+
+        // Set up stdio - if this fails, we need to rollback
+        let stdout_file = match std::fs::File::create(&log_path) {
+            Ok(file) => file,
+            Err(e) => {
+                self.rollback_start_process(&id, &log_path, created_log_dir, created_log_file, inserted_db_record).await;
+                return Err(e.into());
+            }
+        };
+
+        let stderr_file = match std::fs::File::options().create(true).append(true).open(&log_path) {
+            Ok(file) => file,
+            Err(e) => {
+                self.rollback_start_process(&id, &log_path, created_log_dir, created_log_file, inserted_db_record).await;
+                return Err(e.into());
+            }
+        };
+
+        cmd.stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file))
             .stdin(Stdio::null());
 
         // Start the process
@@ -101,15 +152,16 @@ impl ProcessManager {
 
                 (Some(pid), status)
             }
-            Err(_) => {
-                // Process failed to start at all
-                (None, ProcessStatus::Failed)
+            Err(e) => {
+                // Process failed to start at all - perform rollback
+                self.rollback_start_process(&id, &log_path, created_log_dir, created_log_file, inserted_db_record).await;
+                return Err(Error::Other(format!("Failed to start process '{}': {}", name, e)));
             }
         };
 
         // Create process record
         let process_record = ProcessRecord {
-            id,
+            id: id.clone(),
             name: name.to_string(),
             command: command.to_string(),
             args,
@@ -122,7 +174,11 @@ impl ProcessManager {
             log_path: log_path.to_string_lossy().to_string(),
         };
 
-        self.db.insert_process(&process_record).await?;
+        // Insert process record - if this fails, we need to rollback
+        if let Err(e) = self.db.insert_process(&process_record).await {
+            self.rollback_start_process(&id, &log_path, created_log_dir, created_log_file, inserted_db_record).await;
+            return Err(e);
+        }
 
         let message = match initial_status {
             ProcessStatus::Running => {
@@ -140,12 +196,56 @@ impl ProcessManager {
                 }
             }
             ProcessStatus::Failed => {
+                // This case should not happen anymore since we rollback on spawn failure
                 format!("Process '{}' failed to start", name)
             }
             _ => format!("Process '{}' started with unknown status", name),
         };
 
         Ok(message)
+    }
+
+    /// Rollback resources created during a failed start_process operation
+    async fn rollback_start_process(
+        &self,
+        process_id: &str,
+        log_path: &PathBuf,
+        created_log_dir: bool,
+        created_log_file: bool,
+        inserted_db_record: bool,
+    ) {
+        // Remove database record if it was inserted
+        if inserted_db_record {
+            if let Err(e) = self.db.delete_process_by_id(process_id).await {
+                eprintln!("Warning: Failed to rollback database record for process ID {}: {}", process_id, e);
+            }
+        }
+
+        // Remove log file if it was created
+        if created_log_file && log_path.exists() {
+            if let Err(e) = tokio::fs::remove_file(log_path).await {
+                eprintln!("Warning: Failed to rollback log file {}: {}", log_path.display(), e);
+            }
+        }
+
+        // Remove log directory if it was created and is now empty
+        if created_log_dir {
+            if let Some(log_dir) = log_path.parent() {
+                // Only remove if directory is empty
+                if let Ok(mut entries) = tokio::fs::read_dir(log_dir).await {
+                    let mut is_empty = true;
+                    if let Ok(Some(_)) = entries.next_entry().await {
+                        is_empty = false;
+                    }
+
+                    if is_empty {
+                        if let Err(e) = tokio::fs::remove_dir(log_dir).await {
+                            eprintln!("Warning: Failed to rollback log directory {}: {}", log_dir.display(), e);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub async fn stop_process(&self, name: &str) -> Result<String> {
@@ -251,6 +351,62 @@ impl ProcessManager {
         }
 
         Ok(processes)
+    }
+
+    pub async fn clear_processes(&self, all: bool) -> Result<ClearResult> {
+        let processes_to_clear = if all {
+            // Get all processes
+            self.db.get_all_processes().await?
+        } else {
+            // Get only stopped and failed processes
+            self.db.get_processes_by_status(&[ProcessStatus::Stopped, ProcessStatus::Failed]).await?
+        };
+
+        let mut cleared_processes = Vec::new();
+        let mut failed_processes = Vec::new();
+
+        for process in processes_to_clear {
+            match self.delete_single_process(&process).await {
+                Ok(_) => cleared_processes.push(process.name),
+                Err(_) => failed_processes.push(process.name),
+            }
+        }
+
+        let operation_type = if all {
+            "all processes".to_string()
+        } else {
+            "stopped/failed processes".to_string()
+        };
+
+        Ok(ClearResult {
+            cleared_count: cleared_processes.len(),
+            cleared_processes,
+            failed_processes,
+            operation_type,
+        })
+    }
+
+    async fn delete_single_process(&self, process: &ProcessRecord) -> Result<()> {
+        // Stop the process if it's running
+        if let Some(pid) = process.pid {
+            if self.is_process_running(pid).await {
+                // Send SIGTERM to stop the process
+                let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                if result != 0 {
+                    // Process might already be stopped, continue with deletion
+                }
+            }
+        }
+
+        // Delete from database
+        if !self.db.delete_process(&process.name).await? {
+            return Err(Error::ProcessNotFound(process.name.clone()));
+        }
+
+        // Remove log file
+        let _ = tokio::fs::remove_file(&process.log_path).await;
+
+        Ok(())
     }
 
     pub async fn get_process_status(&self, name: &str) -> Result<ProcessRecord> {

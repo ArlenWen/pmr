@@ -85,6 +85,12 @@ pub enum Commands {
         /// Process name
         name: String,
     },
+    /// Clear stopped/failed processes or all processes
+    Clear {
+        /// Clear all processes regardless of status
+        #[arg(long)]
+        all: bool,
+    },
     /// List all processes
     List,
     /// Show process status

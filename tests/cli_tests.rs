@@ -317,3 +317,48 @@ fn test_pmr_logs_with_lines_limit() {
     cleanup_cmd.args(&["delete", "lines_test"]);
     let _ = cleanup_cmd.output();
 }
+
+#[test]
+fn test_pmr_clear_command() {
+    let (mut cmd, _temp_dir) = create_test_command();
+    cmd.args(&["clear"]);
+
+    let output = cmd.output().expect("Failed to execute pmr clear");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No stopped/failed processes to clear") || stdout.contains("Cleared"));
+}
+
+#[test]
+fn test_pmr_clear_all_command() {
+    let (mut cmd, _temp_dir) = create_test_command();
+    cmd.args(&["clear", "--all"]);
+
+    let output = cmd.output().expect("Failed to execute pmr clear --all");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No all processes to clear") || stdout.contains("Cleared"));
+}
+
+#[test]
+fn test_pmr_clear_json_format() {
+    let (mut cmd, _temp_dir) = create_test_command();
+    cmd.args(&["--format", "json", "clear"]);
+
+    let output = cmd.output().expect("Failed to execute pmr clear with JSON format");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should be valid JSON
+    let json_result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
+    assert!(json_result.is_ok(), "Output should be valid JSON: {}", stdout);
+
+    let json = json_result.unwrap();
+    assert!(json.get("cleared_count").is_some());
+    assert!(json.get("operation_type").is_some());
+    assert!(json.get("cleared_processes").is_some());
+    assert!(json.get("failed_processes").is_some());
+}

@@ -1,6 +1,7 @@
 use crate::{
     cli::OutputFormat,
     database::ProcessRecord,
+    process::ClearResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,14 @@ impl Formatter {
                 };
                 serde_json::to_string_pretty(&rotated_logs_output).unwrap_or_else(|_| "{}".to_string())
             }
+        }
+    }
+
+    /// Format clear result output
+    pub fn format_clear_result(&self, result: &ClearResult) -> String {
+        match self.format {
+            OutputFormat::Text => self.format_clear_result_text(result),
+            OutputFormat::Json => self.format_clear_result_json(result),
         }
     }
 
@@ -192,6 +201,45 @@ struct SimpleResponse {
 struct EmptyListResponse {
     processes: Vec<ProcessRecord>,
     message: String,
+}
+
+impl Formatter {
+    // Private methods for clear result formatting
+    fn format_clear_result_text(&self, result: &ClearResult) -> String {
+        let mut output = String::new();
+
+        if result.cleared_count == 0 {
+            output.push_str(&format!("No {} to clear.", result.operation_type));
+        } else {
+            output.push_str(&format!("Cleared {} {} ({} processes):",
+                result.cleared_count,
+                result.operation_type,
+                result.cleared_count
+            ));
+            output.push('\n');
+
+            for process_name in &result.cleared_processes {
+                output.push_str(&format!("  - {}", process_name));
+                output.push('\n');
+            }
+        }
+
+        if !result.failed_processes.is_empty() {
+            output.push('\n');
+            output.push_str(&format!("Failed to clear {} processes:", result.failed_processes.len()));
+            output.push('\n');
+            for process_name in &result.failed_processes {
+                output.push_str(&format!("  - {}", process_name));
+                output.push('\n');
+            }
+        }
+
+        output.trim_end().to_string()
+    }
+
+    fn format_clear_result_json(&self, result: &ClearResult) -> String {
+        serde_json::to_string_pretty(result).unwrap_or_else(|_| "{}".to_string())
+    }
 }
 
 

@@ -135,6 +135,19 @@ pmr restart <进程名>
 pmr delete <进程名>
 ```
 
+### 清空进程
+
+```bash
+# 清空已停止或失败的进程
+pmr clear
+
+# 清空所有进程（包括正在运行的进程）
+pmr clear --all
+
+# 使用 JSON 格式输出
+pmr --format json clear
+```
+
 ## HTTP API (可选功能)
 
 PMR 支持可选的 HTTP API 功能，需要在编译时启用 `http-api` 特性。
@@ -308,6 +321,30 @@ pmr logs my-service --rotated
 
 # 查看进程状态（包含日志文件路径）
 pmr status my-service
+```
+
+### 5. 批量清理进程
+
+```bash
+# 启动多个测试进程
+pmr start test1 echo "test1"
+pmr start test2 echo "test2"
+pmr start test3 sleep 60
+
+# 查看所有进程状态
+pmr list
+
+# 清空已停止或失败的进程（保留正在运行的进程）
+pmr clear
+
+# 查看剩余进程
+pmr list
+
+# 清空所有进程（包括正在运行的进程）
+pmr clear --all
+
+# 使用 JSON 格式查看清理结果
+pmr --format json clear
 ```
 
 

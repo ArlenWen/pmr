@@ -293,3 +293,74 @@ async fn test_log_lines_limit() {
     // Cleanup
     pm.delete_process(name).await.unwrap();
 }
+
+#[tokio::test]
+async fn test_start_process_rollback() {
+    let (pm, temp_dir) = create_test_process_manager().await;
+
+    println!("Starting process rollback test");
+
+    // Test 1: Try to start a process with an invalid working directory that will fail to spawn
+    let result = pm.start_process(
+        "invalid_process",
+        "echo",
+        vec!["test".to_string()],
+        HashMap::new(),
+        Some("/nonexistent/directory/that/does/not/exist".to_string()),
+        None,
+    ).await;
+
+    // Should fail
+    assert!(result.is_err());
+
+    // Verify no database record was created
+    let process_result = pm.get_process_status("invalid_process").await;
+    assert!(process_result.is_err(), "Database record should have been rolled back");
+
+    // Verify log file was not left behind
+    let log_path = temp_dir.path().join("logs").join("invalid_process.log");
+    assert!(!log_path.exists(), "Log file should have been rolled back");
+
+    // Test 2: Try to start a process with another invalid working directory
+    let result = pm.start_process(
+        "invalid_process2",
+        "echo",
+        vec!["test2".to_string()],
+        HashMap::new(),
+        Some("/another/nonexistent/directory".to_string()),
+        None,
+    ).await;
+
+    // Should fail
+    assert!(result.is_err());
+
+    // Verify no database record was created
+    let process_result = pm.get_process_status("invalid_process2").await;
+    assert!(process_result.is_err(), "Database record should have been rolled back");
+
+    // Verify log file was not left behind
+    let log_path2 = temp_dir.path().join("logs").join("invalid_process2.log");
+    assert!(!log_path2.exists(), "Log file should have been rolled back");
+
+    // Test 3: Verify that a successful process start still works
+    let result = pm.start_process(
+        "valid_process",
+        "echo",
+        vec!["hello".to_string()],
+        HashMap::new(),
+        None,
+        None,
+    ).await;
+
+    // Should succeed
+    assert!(result.is_ok());
+
+    // Verify database record exists
+    let process_result = pm.get_process_status("valid_process").await;
+    assert!(process_result.is_ok(), "Valid process should have database record");
+
+    // Clean up
+    pm.delete_process("valid_process").await.unwrap();
+
+    println!("Process rollback test passed!");
+}

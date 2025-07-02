@@ -1,4 +1,4 @@
-use sqlx::{SqlitePool, Row};
+use sqlx::{SqlitePool, Row, sqlite::SqlitePoolOptions};
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -47,11 +47,29 @@ pub struct Database {
 impl Database {
     pub async fn new(database_url: &str) -> Result<Self> {
         // Add more detailed error context for database connection
-        let pool = SqlitePool::connect(database_url).await
+        // Configure connection pool for better concurrent performance
+        let pool = SqlitePoolOptions::new()
+            .max_connections(100) // Increase max connections for concurrent access
+            .min_connections(5)   // Keep some connections alive
+            .acquire_timeout(std::time::Duration::from_secs(30)) // Longer timeout for high load
+            .idle_timeout(std::time::Duration::from_secs(600))   // Keep connections alive longer
+            .connect(database_url).await
             .map_err(|e| Error::Other(format!("Failed to connect to database at '{}': {}", database_url, e)))?;
         let db = Self { pool };
+        db.configure_for_concurrency().await?;
         db.migrate().await?;
         Ok(db)
+    }
+
+    async fn configure_for_concurrency(&self) -> Result<()> {
+        // Configure SQLite for better concurrent performance
+        sqlx::query("PRAGMA journal_mode = WAL").execute(&self.pool).await?;
+        sqlx::query("PRAGMA synchronous = NORMAL").execute(&self.pool).await?;
+        sqlx::query("PRAGMA cache_size = 10000").execute(&self.pool).await?;
+        sqlx::query("PRAGMA temp_store = memory").execute(&self.pool).await?;
+        sqlx::query("PRAGMA mmap_size = 268435456").execute(&self.pool).await?; // 256MB
+        sqlx::query("PRAGMA busy_timeout = 30000").execute(&self.pool).await?; // 30 seconds
+        Ok(())
     }
 
     async fn migrate(&self) -> Result<()> {
@@ -211,6 +229,55 @@ impl Database {
             .await?;
 
         Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_process_by_id(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM processes WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn get_processes_by_status(&self, statuses: &[ProcessStatus]) -> Result<Vec<ProcessRecord>> {
+        if statuses.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let status_strings: Vec<String> = statuses.iter().map(|s| s.to_string()).collect();
+        let placeholders = status_strings.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!("SELECT * FROM processes WHERE status IN ({}) ORDER BY created_at DESC", placeholders);
+
+        let mut query_builder = sqlx::query(&query);
+        for status in &status_strings {
+            query_builder = query_builder.bind(status);
+        }
+
+        let rows = query_builder.fetch_all(&self.pool).await?;
+
+        let mut processes = Vec::new();
+        for row in rows {
+            processes.push(self.row_to_process_record(row)?);
+        }
+        Ok(processes)
+    }
+
+    pub async fn delete_processes_by_names(&self, names: &[String]) -> Result<usize> {
+        if names.is_empty() {
+            return Ok(0);
+        }
+
+        let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let query = format!("DELETE FROM processes WHERE name IN ({})", placeholders);
+
+        let mut query_builder = sqlx::query(&query);
+        for name in names {
+            query_builder = query_builder.bind(name);
+        }
+
+        let result = query_builder.execute(&self.pool).await?;
+        Ok(result.rows_affected() as usize)
     }
 
     fn row_to_process_record(&self, row: sqlx::sqlite::SqliteRow) -> Result<ProcessRecord> {
