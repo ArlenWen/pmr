@@ -1,5 +1,20 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, ValueEnum, Serialize, Deserialize)]
+pub enum OutputFormat {
+    /// Plain text output (default)
+    Text,
+    /// JSON formatted output
+    Json,
+}
+
+impl Default for OutputFormat {
+    fn default() -> Self {
+        OutputFormat::Text
+    }
+}
 
 #[cfg(feature = "http-api")]
 #[derive(Subcommand)]
@@ -26,6 +41,10 @@ pub enum AuthCommands {
 #[command(about = "A process management tool")]
 #[command(version = "0.2.0")]
 pub struct Cli {
+    /// Output format
+    #[arg(long, value_enum, default_value_t = OutputFormat::default())]
+    pub format: OutputFormat,
+
     #[command(subcommand)]
     pub command: Commands,
 }

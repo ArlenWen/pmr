@@ -35,7 +35,7 @@ impl ProcessManager {
         env_vars: HashMap<String, String>,
         working_dir: Option<String>,
         log_dir: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         // Check if process already exists
         if self.db.get_process_by_name(name).await?.is_some() {
             return Err(Error::ProcessAlreadyExists(name.to_string()));
@@ -124,27 +124,31 @@ impl ProcessManager {
 
         self.db.insert_process(&process_record).await?;
 
-        match initial_status {
+        let message = match initial_status {
             ProcessStatus::Running => {
                 if let Some(pid) = pid {
-                    println!("Process '{}' started with PID {}", name, pid);
+                    format!("Process '{}' started with PID {}", name, pid)
+                } else {
+                    format!("Process '{}' started", name)
                 }
             }
             ProcessStatus::Stopped => {
                 if let Some(pid) = pid {
-                    println!("Process '{}' started with PID {} but exited quickly", name, pid);
+                    format!("Process '{}' started with PID {} but exited quickly", name, pid)
+                } else {
+                    format!("Process '{}' started but exited quickly", name)
                 }
             }
             ProcessStatus::Failed => {
-                println!("Process '{}' failed to start", name);
+                format!("Process '{}' failed to start", name)
             }
-            _ => {}
-        }
+            _ => format!("Process '{}' started with unknown status", name),
+        };
 
-        Ok(())
+        Ok(message)
     }
 
-    pub async fn stop_process(&self, name: &str) -> Result<()> {
+    pub async fn stop_process(&self, name: &str) -> Result<String> {
         let process = self.db.get_process_by_name(name).await?
             .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
 
@@ -153,18 +157,16 @@ impl ProcessManager {
             let result = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
             if result == 0 {
                 self.db.update_process_status(name, ProcessStatus::Stopped, Some(pid)).await?;
-                println!("Process '{}' stopped", name);
+                Ok(format!("Process '{}' stopped", name))
             } else {
-                return Err(Error::Other(format!("Failed to stop process '{}' with PID {}", name, pid)));
+                Err(Error::Other(format!("Failed to stop process '{}' with PID {}", name, pid)))
             }
         } else {
-            return Err(Error::InvalidProcessState(format!("Process '{}' has no PID", name)));
+            Err(Error::InvalidProcessState(format!("Process '{}' has no PID", name)))
         }
-
-        Ok(())
     }
 
-    pub async fn restart_process(&self, name: &str) -> Result<()> {
+    pub async fn restart_process(&self, name: &str) -> Result<String> {
         let process = self.db.get_process_by_name(name).await?
             .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
 
@@ -184,7 +186,7 @@ impl ProcessManager {
         self.db.delete_process(name).await?;
 
         // Start the process again
-        self.start_process(
+        let start_message = self.start_process(
             name,
             &process.command,
             process.args,
@@ -193,10 +195,10 @@ impl ProcessManager {
             log_dir,
         ).await?;
 
-        Ok(())
+        Ok(format!("Process '{}' restarted. {}", name, start_message))
     }
 
-    pub async fn delete_process(&self, name: &str) -> Result<()> {
+    pub async fn delete_process(&self, name: &str) -> Result<String> {
         let process = self.db.get_process_by_name(name).await?
             .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
 
@@ -211,12 +213,10 @@ impl ProcessManager {
         if self.db.delete_process(name).await? {
             // Optionally remove log file
             let _ = tokio::fs::remove_file(&process.log_path).await;
-            println!("Process '{}' deleted", name);
+            Ok(format!("Process '{}' deleted", name))
         } else {
-            return Err(Error::ProcessNotFound(name.to_string()));
+            Err(Error::ProcessNotFound(name.to_string()))
         }
-
-        Ok(())
     }
 
     pub async fn list_processes(&self) -> Result<Vec<ProcessRecord>> {
@@ -346,15 +346,14 @@ impl ProcessManager {
     }
 
     /// Manually rotate log file for a process
-    pub async fn rotate_process_logs(&self, name: &str) -> Result<()> {
+    pub async fn rotate_process_logs(&self, name: &str) -> Result<String> {
         let process = self.db.get_process_by_name(name).await?
             .ok_or_else(|| Error::ProcessNotFound(name.to_string()))?;
 
         let log_path = PathBuf::from(&process.log_path);
         self.log_rotator.force_rotate(&log_path).await?;
 
-        println!("Log rotation completed for process '{}'", name);
-        Ok(())
+        Ok(format!("Log rotation completed for process '{}'", name))
     }
 
     /// Get log rotation status for a process

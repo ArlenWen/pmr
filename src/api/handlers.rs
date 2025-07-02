@@ -189,10 +189,7 @@ pub async fn start_process(
         )
         .await
     {
-        Ok(_) => Ok(Json(ApiResponse::success(format!(
-            "Process '{}' started successfully",
-            request.name
-        )))),
+        Ok(message) => Ok(Json(ApiResponse::success(message))),
         Err(Error::ProcessAlreadyExists(_)) => Err(StatusCode::CONFLICT),
         Err(e) => {
             eprintln!("Error starting process: {}", e);
@@ -224,10 +221,7 @@ pub async fn stop_process(
 ) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.stop_process(&name).await {
-        Ok(_) => Ok(Json(ApiResponse::success(format!(
-            "Process '{}' stopped successfully",
-            name
-        )))),
+        Ok(message) => Ok(Json(ApiResponse::success(message))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error stopping process: {}", e);
@@ -259,10 +253,7 @@ pub async fn restart_process(
 ) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.restart_process(&name).await {
-        Ok(_) => Ok(Json(ApiResponse::success(format!(
-            "Process '{}' restarted successfully",
-            name
-        )))),
+        Ok(message) => Ok(Json(ApiResponse::success(message))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error restarting process: {}", e);
@@ -294,10 +285,7 @@ pub async fn delete_process(
 ) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.delete_process(&name).await {
-        Ok(_) => Ok(Json(ApiResponse::success(format!(
-            "Process '{}' deleted successfully",
-            name
-        )))),
+        Ok(message) => Ok(Json(ApiResponse::success(message))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error deleting process: {}", e);
