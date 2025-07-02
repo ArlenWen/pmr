@@ -39,7 +39,7 @@ pub enum AuthCommands {
 #[derive(Parser)]
 #[command(name = "pmr")]
 #[command(about = "A process management tool")]
-#[command(version = "0.2.0")]
+#[command(version = "0.3.0")]
 pub struct Cli {
     /// Output format
     #[arg(long, value_enum, default_value_t = OutputFormat::default())]
