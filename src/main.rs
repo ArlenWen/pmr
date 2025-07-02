@@ -5,6 +5,12 @@ use pmr::{
     process::ProcessManager,
 };
 
+#[cfg(feature = "http-api")]
+use pmr::{
+    api::{ApiServer, AuthManager},
+    cli::AuthCommands,
+};
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -77,6 +83,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 let logs = process_manager.get_process_logs(&name, lines).await?;
                 println!("{}", logs);
+            }
+        }
+        #[cfg(feature = "http-api")]
+        Commands::Serve { port } => {
+            let api_server = ApiServer::new(process_manager, port)?;
+            println!("Starting PMR HTTP API server on port {}...", port);
+            println!("Use 'pmr auth generate <name>' to create API tokens for authentication");
+            api_server.start().await?;
+        }
+        #[cfg(feature = "http-api")]
+        Commands::Auth { command } => {
+            handle_auth_command(command).await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "http-api")]
+async fn handle_auth_command(command: AuthCommands) -> Result<(), Box<dyn std::error::Error>> {
+    let mut auth_manager = AuthManager::new()?;
+
+    match command {
+        AuthCommands::Generate { name, expires_in } => {
+            let token = auth_manager.generate_token(name.clone(), expires_in)?;
+            println!("Generated new API token:");
+            println!("Name: {}", token.name);
+            println!("Token: {}", token.token);
+            println!("Created: {}", token.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+            if let Some(expires_at) = token.expires_at {
+                println!("Expires: {}", expires_at.format("%Y-%m-%d %H:%M:%S UTC"));
+            } else {
+                println!("Expires: Never");
+            }
+            println!();
+            println!("Use this token in API requests:");
+            println!("Authorization: Bearer {}", token.token);
+        }
+        AuthCommands::List => {
+            let tokens = auth_manager.list_tokens();
+            if tokens.is_empty() {
+                println!("No API tokens found.");
+            } else {
+                println!("{:<20} {:<10} {:<20} {:<20}", "NAME", "STATUS", "CREATED", "EXPIRES");
+                println!("{}", "-".repeat(80));
+                for token in tokens {
+                    let status = if token.is_active { "active" } else { "revoked" };
+                    let expires = token.expires_at
+                        .map(|e| e.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "Never".to_string());
+                    println!("{:<20} {:<10} {:<20} {:<20}",
+                        token.name,
+                        status,
+                        token.created_at.format("%Y-%m-%d %H:%M:%S"),
+                        expires
+                    );
+                }
+            }
+        }
+        AuthCommands::Revoke { token } => {
+            match auth_manager.revoke_token(&token) {
+                Ok(_) => println!("Token revoked successfully"),
+                Err(e) => println!("Error revoking token: {}", e),
             }
         }
     }

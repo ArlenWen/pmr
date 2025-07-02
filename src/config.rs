@@ -6,6 +6,30 @@ pub struct Config {
     pub database_path: PathBuf,
     pub default_log_dir: PathBuf,
     pub log_rotation: LogRotationConfig,
+    #[cfg(feature = "http-api")]
+    pub api: ApiConfig,
+}
+
+#[cfg(feature = "http-api")]
+#[derive(Debug, Clone)]
+pub struct ApiConfig {
+    pub enabled: bool,
+    pub port: u16,
+    pub auth_tokens_path: PathBuf,
+}
+
+#[cfg(feature = "http-api")]
+impl Default for ApiConfig {
+    fn default() -> Self {
+        let home_dir = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let pmr_dir = PathBuf::from(home_dir).join(".pmr");
+
+        Self {
+            enabled: false,
+            port: 8080,
+            auth_tokens_path: pmr_dir.join("api_tokens.json"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +63,8 @@ impl Config {
             database_path: pmr_dir.join("processes.db"),
             default_log_dir,
             log_rotation: LogRotationConfig::default(),
+            #[cfg(feature = "http-api")]
+            api: ApiConfig::default(),
         }
     }
 
@@ -49,6 +75,11 @@ impl Config {
 
     pub fn with_log_rotation(mut self, config: LogRotationConfig) -> Self {
         self.log_rotation = config;
+        self
+    }
+
+    pub fn with_database_path(mut self, database_path: PathBuf) -> Self {
+        self.database_path = database_path;
         self
     }
 

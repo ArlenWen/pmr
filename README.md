@@ -10,10 +10,10 @@ PMR (Process Manager in Rust) 是一个用 Rust 编写的命令行进程管理�
 - **日志管理**: 自动捕获和管理进程的 stdout 和 stderr
 - **SQLite 存储**: 使用 SQLite 数据库存储进程信息，支持并发操作
 - **状态监控**: 实时监控进程状态
+- **HTTP API**: 可选的 HTTP API 支持，提供 RESTful 接口进行远程管理
 - **日志轮转**: 支持自动和手动日志轮转
 - **(TODO)定时任务**: 支持定时执行任务
 - **(TODO)进程组管理**: 支持进程组管理，支持启动、停止、重启、删除进程组
-- **(TODO)HTTP 接口**: 通过 HTTP 接口管理进程，支持 RESTful API
 
 ## 安装
 
@@ -22,11 +22,17 @@ PMR (Process Manager in Rust) 是一个用 Rust 编写的命令行进程管理�
 git clone https://github.com/ArlenWen/pmr.git
 cd pmr
 
-# 编译
+# 编译（基本功能）
 cargo build --release
+
+# 编译（包含 HTTP API 功能）
+cargo build --release --features http-api
 
 # 可选：安装到系统路径
 cargo install --path .
+
+# 安装包含 HTTP API 功能的版本
+cargo install --path . --features http-api
 ```
 
 ## 使用方法
@@ -128,6 +134,93 @@ pmr restart <进程名>
 ```bash
 pmr delete <进程名>
 ```
+
+## HTTP API (可选功能)
+
+PMR 支持可选的 HTTP API 功能，需要在编译时启用 `http-api` 特性。
+
+### 启动 API 服务器
+
+```bash
+# 启动 HTTP API 服务器（默认端口 8080）
+pmr serve
+
+# 指定端口
+pmr serve --port 3000
+```
+
+### 管理 API 认证令牌
+
+```bash
+# 生成新的 API 令牌
+pmr auth generate my-token
+
+# 生成有过期时间的令牌（30天后过期）
+pmr auth generate my-token --expires-in 30
+
+# 列出所有令牌
+pmr auth list
+
+# 撤销令牌
+pmr auth revoke <token-string>
+```
+
+### API 文档
+
+PMR 提供完整的 Swagger/OpenAPI 文档：
+
+- **Swagger UI**: `http://localhost:8080/swagger-ui/` - 交互式 API 文档界面
+- **OpenAPI JSON**: `http://localhost:8080/api-docs/openapi.json` - OpenAPI 规范文件
+
+### API 端点
+
+所有 API 请求都需要在 Header 中包含认证令牌：
+```
+Authorization: Bearer <your-token>
+```
+
+#### 进程管理端点
+
+- `GET /api/processes` - 获取所有进程列表
+- `POST /api/processes` - 启动新进程
+- `GET /api/processes/{name}` - 获取指定进程状态
+- `PUT /api/processes/{name}/stop` - 停止进程
+- `PUT /api/processes/{name}/restart` - 重启进程
+- `DELETE /api/processes/{name}` - 删除进程
+- `GET /api/processes/{name}/logs` - 获取进程日志
+
+#### API 使用示例
+
+```bash
+# 获取所有进程
+curl -H "Authorization: Bearer <token>" http://localhost:8080/api/processes
+
+# 启动新进程
+curl -X POST -H "Authorization: Bearer <token>" \
+     -H "Content-Type: application/json" \
+     -d '{"name":"test","command":"sleep","args":["60"]}' \
+     http://localhost:8080/api/processes
+
+# 获取进程状态
+curl -H "Authorization: Bearer <token>" http://localhost:8080/api/processes/test
+
+# 停止进程
+curl -X PUT -H "Authorization: Bearer <token>" \
+     http://localhost:8080/api/processes/test/stop
+
+# 获取进程日志
+curl -H "Authorization: Bearer <token>" \
+     http://localhost:8080/api/processes/test/logs
+```
+
+### 使用 Swagger UI
+
+1. 启动 API 服务器：`pmr serve --port 8080`
+2. 生成 API 令牌：`pmr auth generate my-token`
+3. 在浏览器中打开：`http://localhost:8080/swagger-ui/`
+4. 点击右上角的 "Authorize" 按钮
+5. 输入 `Bearer <your-token>` 进行认证
+6. 现在可以直接在 Swagger UI 中测试所有 API 端点
 
 ## 配置
 

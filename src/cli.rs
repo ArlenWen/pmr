@@ -1,10 +1,30 @@
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 
+#[cfg(feature = "http-api")]
+#[derive(Subcommand)]
+pub enum AuthCommands {
+    /// Generate a new API token
+    Generate {
+        /// Token name/description
+        name: String,
+        /// Token expiration in days (optional)
+        #[arg(long)]
+        expires_in: Option<u32>,
+    },
+    /// List all API tokens
+    List,
+    /// Revoke an API token
+    Revoke {
+        /// Token to revoke
+        token: String,
+    },
+}
+
 #[derive(Parser)]
 #[command(name = "pmr")]
 #[command(about = "A process management tool")]
-#[command(version = "0.1.0")]
+#[command(version = "0.2.0")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -66,6 +86,19 @@ pub enum Commands {
         /// Manually rotate log file
         #[arg(long)]
         rotate: bool,
+    },
+    #[cfg(feature = "http-api")]
+    /// Start HTTP API server
+    Serve {
+        /// Port to bind the API server (default: 8080)
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
+    #[cfg(feature = "http-api")]
+    /// Manage API authentication tokens
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommands,
     },
 }
 

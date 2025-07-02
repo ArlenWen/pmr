@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "http-api", derive(utoipa::ToSchema))]
 pub struct ProcessRecord {
     pub id: String,
     pub name: String,
@@ -20,6 +21,7 @@ pub struct ProcessRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "http-api", derive(utoipa::ToSchema))]
 pub enum ProcessStatus {
     Running,
     Stopped,
