@@ -3,7 +3,7 @@ use utoipa::OpenApi;
 
 #[cfg(feature = "http-api")]
 use crate::{
-    api::handlers::{ApiResponse, StartProcessRequest, LogsQuery},
+    api::handlers::{ProcessListResponse, ProcessResponse, MessageResponse, StartProcessRequest, LogsQuery},
     database::{ProcessRecord, ProcessStatus},
 };
 
@@ -23,9 +23,9 @@ use crate::{
         schemas(
             ProcessRecord,
             ProcessStatus,
-            ApiResponse<Vec<ProcessRecord>>,
-            ApiResponse<ProcessRecord>,
-            ApiResponse<String>,
+            ProcessListResponse,
+            ProcessResponse,
+            MessageResponse,
             StartProcessRequest,
             LogsQuery,
         )

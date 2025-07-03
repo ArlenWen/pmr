@@ -52,9 +52,101 @@ pub struct ApiResponse<T> {
     pub error: Option<String>,
 }
 
+// Specific response types for OpenAPI schema generation
+#[cfg(feature = "http-api")]
+#[derive(Serialize, ToSchema)]
+pub struct ProcessListResponse {
+    /// Whether the request was successful
+    pub success: bool,
+    /// List of processes (present on success)
+    pub data: Option<Vec<ProcessRecord>>,
+    /// Error message (present on failure)
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "http-api")]
+#[derive(Serialize, ToSchema)]
+pub struct ProcessResponse {
+    /// Whether the request was successful
+    pub success: bool,
+    /// Process data (present on success)
+    pub data: Option<ProcessRecord>,
+    /// Error message (present on failure)
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "http-api")]
+#[derive(Serialize, ToSchema)]
+pub struct MessageResponse {
+    /// Whether the request was successful
+    pub success: bool,
+    /// Response message (present on success)
+    pub data: Option<String>,
+    /// Error message (present on failure)
+    pub error: Option<String>,
+}
+
 #[cfg(feature = "http-api")]
 impl<T> ApiResponse<T> {
     pub fn success(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn error(message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(message),
+        }
+    }
+}
+
+// Implementations for specific response types
+#[cfg(feature = "http-api")]
+impl ProcessListResponse {
+    pub fn success(data: Vec<ProcessRecord>) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn error(message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(message),
+        }
+    }
+}
+
+#[cfg(feature = "http-api")]
+impl ProcessResponse {
+    pub fn success(data: ProcessRecord) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn error(message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(message),
+        }
+    }
+}
+
+#[cfg(feature = "http-api")]
+impl MessageResponse {
+    pub fn success(data: String) -> Self {
         Self {
             success: true,
             data: Some(data),
@@ -103,7 +195,7 @@ pub struct LogsQuery {
     get,
     path = "/api/processes",
     responses(
-        (status = 200, description = "List of all processes", body = ApiResponse<Vec<ProcessRecord>>),
+        (status = 200, description = "List of all processes", body = ProcessListResponse),
         (status = 401, description = "Unauthorized")
     ),
     security(
@@ -113,10 +205,10 @@ pub struct LogsQuery {
 pub async fn list_processes(
     State((process_manager, auth_manager)): State<(Arc<ProcessManager>, Arc<Mutex<AuthManager>>)>,
     headers: HeaderMap,
-) -> std::result::Result<Json<ApiResponse<Vec<ProcessRecord>>>, StatusCode> {
+) -> std::result::Result<Json<ProcessListResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.list_processes().await {
-        Ok(processes) => Ok(Json(ApiResponse::success(processes))),
+        Ok(processes) => Ok(Json(ProcessListResponse::success(processes))),
         Err(e) => {
             eprintln!("Error listing processes: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -129,7 +221,7 @@ pub async fn list_processes(
     get,
     path = "/api/processes/{name}",
     responses(
-        (status = 200, description = "Process status", body = ApiResponse<ProcessRecord>),
+        (status = 200, description = "Process status", body = ProcessResponse),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Process not found")
     ),
@@ -144,10 +236,10 @@ pub async fn get_process_status(
     State((process_manager, auth_manager)): State<(Arc<ProcessManager>, Arc<Mutex<AuthManager>>)>,
     headers: HeaderMap,
     Path(name): Path<String>,
-) -> std::result::Result<Json<ApiResponse<ProcessRecord>>, StatusCode> {
+) -> std::result::Result<Json<ProcessResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.get_process_status(&name).await {
-        Ok(process) => Ok(Json(ApiResponse::success(process))),
+        Ok(process) => Ok(Json(ProcessResponse::success(process))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error getting process status: {}", e);
@@ -162,7 +254,7 @@ pub async fn get_process_status(
     path = "/api/processes",
     request_body = StartProcessRequest,
     responses(
-        (status = 200, description = "Process started successfully", body = ApiResponse<String>),
+        (status = 200, description = "Process started successfully", body = MessageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 409, description = "Process already exists")
     ),
@@ -174,10 +266,10 @@ pub async fn start_process(
     State((process_manager, auth_manager)): State<(Arc<ProcessManager>, Arc<Mutex<AuthManager>>)>,
     headers: HeaderMap,
     Json(request): Json<StartProcessRequest>,
-) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
+) -> std::result::Result<Json<MessageResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     let env_vars = request.env_vars.unwrap_or_default();
-    
+
     match process_manager
         .start_process(
             &request.name,
@@ -189,7 +281,7 @@ pub async fn start_process(
         )
         .await
     {
-        Ok(message) => Ok(Json(ApiResponse::success(message))),
+        Ok(message) => Ok(Json(MessageResponse::success(message))),
         Err(Error::ProcessAlreadyExists(_)) => Err(StatusCode::CONFLICT),
         Err(e) => {
             eprintln!("Error starting process: {}", e);
@@ -203,7 +295,7 @@ pub async fn start_process(
     put,
     path = "/api/processes/{name}/stop",
     responses(
-        (status = 200, description = "Process stopped successfully", body = ApiResponse<String>),
+        (status = 200, description = "Process stopped successfully", body = MessageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Process not found")
     ),
@@ -218,10 +310,10 @@ pub async fn stop_process(
     State((process_manager, auth_manager)): State<(Arc<ProcessManager>, Arc<Mutex<AuthManager>>)>,
     headers: HeaderMap,
     Path(name): Path<String>,
-) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
+) -> std::result::Result<Json<MessageResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.stop_process(&name).await {
-        Ok(message) => Ok(Json(ApiResponse::success(message))),
+        Ok(message) => Ok(Json(MessageResponse::success(message))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error stopping process: {}", e);
@@ -235,7 +327,7 @@ pub async fn stop_process(
     put,
     path = "/api/processes/{name}/restart",
     responses(
-        (status = 200, description = "Process restarted successfully", body = ApiResponse<String>),
+        (status = 200, description = "Process restarted successfully", body = MessageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Process not found")
     ),
@@ -250,10 +342,10 @@ pub async fn restart_process(
     State((process_manager, auth_manager)): State<(Arc<ProcessManager>, Arc<Mutex<AuthManager>>)>,
     headers: HeaderMap,
     Path(name): Path<String>,
-) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
+) -> std::result::Result<Json<MessageResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.restart_process(&name).await {
-        Ok(message) => Ok(Json(ApiResponse::success(message))),
+        Ok(message) => Ok(Json(MessageResponse::success(message))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error restarting process: {}", e);
@@ -267,7 +359,7 @@ pub async fn restart_process(
     delete,
     path = "/api/processes/{name}",
     responses(
-        (status = 200, description = "Process deleted successfully", body = ApiResponse<String>),
+        (status = 200, description = "Process deleted successfully", body = MessageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Process not found")
     ),
@@ -282,10 +374,10 @@ pub async fn delete_process(
     State((process_manager, auth_manager)): State<(Arc<ProcessManager>, Arc<Mutex<AuthManager>>)>,
     headers: HeaderMap,
     Path(name): Path<String>,
-) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
+) -> std::result::Result<Json<MessageResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     match process_manager.delete_process(&name).await {
-        Ok(message) => Ok(Json(ApiResponse::success(message))),
+        Ok(message) => Ok(Json(MessageResponse::success(message))),
         Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
         Err(e) => {
             eprintln!("Error deleting process: {}", e);
@@ -299,7 +391,7 @@ pub async fn delete_process(
     get,
     path = "/api/processes/{name}/logs",
     responses(
-        (status = 200, description = "Process logs", body = ApiResponse<String>),
+        (status = 200, description = "Process logs", body = MessageResponse),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Process not found")
     ),
@@ -317,11 +409,11 @@ pub async fn get_process_logs(
     headers: HeaderMap,
     Path(name): Path<String>,
     Query(params): Query<LogsQuery>,
-) -> std::result::Result<Json<ApiResponse<String>>, StatusCode> {
+) -> std::result::Result<Json<MessageResponse>, StatusCode> {
     validate_auth(&headers, &auth_manager)?;
     if params.rotated.unwrap_or(false) {
         match process_manager.get_rotated_logs(&name).await {
-            Ok(logs) => Ok(Json(ApiResponse::success(logs.join("\n")))),
+            Ok(logs) => Ok(Json(MessageResponse::success(logs.join("\n")))),
             Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
             Err(e) => {
                 eprintln!("Error getting rotated logs: {}", e);
@@ -330,7 +422,7 @@ pub async fn get_process_logs(
         }
     } else {
         match process_manager.get_process_logs(&name, params.lines).await {
-            Ok(logs) => Ok(Json(ApiResponse::success(logs))),
+            Ok(logs) => Ok(Json(MessageResponse::success(logs))),
             Err(Error::ProcessNotFound(_)) => Err(StatusCode::NOT_FOUND),
             Err(e) => {
                 eprintln!("Error getting process logs: {}", e);
